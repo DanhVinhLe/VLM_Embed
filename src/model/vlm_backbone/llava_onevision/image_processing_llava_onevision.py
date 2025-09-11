@@ -17,7 +17,6 @@
 from collections.abc import Iterable
 from typing import Optional, Union
 
-import PIL
 import numpy as np
 
 from transformers.image_processing_utils import (
@@ -153,7 +152,7 @@ class LlavaOnevisionImageProcessor(BaseImageProcessor):
         do_resize: bool = True,
         size: Optional[dict[str, int]] = None,
         image_grid_pinpoints: Optional[list] = None,
-        resample: PIL.Image.Resampling = PIL.Image.Resampling.BICUBIC,
+        resample: PILImageResampling = PILImageResampling.BICUBIC,
         do_rescale: bool = True,
         rescale_factor: Union[int, float] = 1 / 255,
         do_normalize: bool = True,
@@ -346,7 +345,7 @@ class LlavaOnevisionImageProcessor(BaseImageProcessor):
         grid_pinpoints,
         size: tuple,
         patch_size: int,
-        resample: PIL.Image.Resampling,
+        resample: PILImageResampling,
         data_format: ChannelDimension,
         input_data_format: ChannelDimension,
     ) -> list[np.array]:
@@ -528,7 +527,7 @@ class LlavaOnevisionImageProcessor(BaseImageProcessor):
         images: ImageInput,
         do_resize: Optional[bool] = None,
         size: Optional[dict[str, int]] = None,
-        resample: Optional[PIL.Image.Resampling] = None,
+        resample: Optional[PILImageResampling] = None,
         do_rescale: Optional[bool] = None,
         rescale_factor: Optional[float] = None,
         do_normalize: Optional[bool] = None,
@@ -604,7 +603,7 @@ class LlavaOnevisionImageProcessor(BaseImageProcessor):
         do_resize: Optional[bool] = None,
         size: Optional[dict[str, int]] = None,
         image_grid_pinpoints: Optional[list] = None,
-        resample: Optional[PIL.Image.Resampling] = None,
+        resample: Optional[PILImageResampling] = None,
         do_rescale: Optional[bool] = None,
         rescale_factor: Optional[float] = None,
         do_normalize: Optional[bool] = None,

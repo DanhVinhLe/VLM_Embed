@@ -16,7 +16,7 @@ from src.model.vlm_backbone.gme.gme_inference import GmeQwen2VL
 from src.model.vlm_backbone.lamra.lamra_inference import LamRAQwen2VL
 from src.model.vlm_backbone.phi3_v.modeling_phi3_v import Phi3VForCausalLM
 from src.model.vlm_backbone.llava_next import LlavaNextForConditionalGeneration
-from src.model.vlm_backbone.llava_onevision import LlavaOneVisionForConditionalGeneration
+from src.model.vlm_backbone.llava_onevision import LlavaOnevisionForConditionalGeneration
 from peft import PeftConfig
 from unittest.mock import patch
 
@@ -163,7 +163,7 @@ class MMEBModel(nn.Module):
             config._attn_implementation = "flash_attention_2"
             config.use_cache = False
             config.padding_side = "left"
-            base_model = LlavaOneVisionForConditionalGeneration.from_pretrained(
+            base_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
                 model_args.model_name,
                 config=config,
                 torch_dtype=torch.bfloat16,
@@ -275,7 +275,7 @@ class MMEBModel(nn.Module):
             model_backbone = get_backbone_name(hf_config=config, model_type=model_args.model_type)
             setattr(model_args, 'model_backbone', model_backbone)
         print_master(f'Loading backbone [{model_args.model_backbone}] from {model_args.model_name}')
-        if model_args.model_backbone in {LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION}:
+        if model_args.model_backbone in {LLAVA_ONEVISION, LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION}:
             config = AutoConfig.from_pretrained(model_args.model_name, trust_remote_code=True)
             config._attn_implementation = "flash_attention_2"
             config.vision_config._attn_implementation = "flash_attention_2"

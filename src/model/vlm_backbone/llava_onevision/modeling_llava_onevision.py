@@ -30,9 +30,6 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, ModelOutput
 from transformers.modeling_utils import PreTrainedModel
 # from ...processing_utils import Unpack
 from transformers.utils import (
-    TransformersKwargs,
-    auto_docstring,
-    can_return_tuple,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
     logging,
@@ -42,11 +39,6 @@ from transformers.models.llava_onevision.configuration_llava_onevision import Ll
 
 
 @dataclass
-@auto_docstring(
-    custom_intro="""
-    Base class for Llava outputs, with hidden states and attentions.
-    """
-)
 class LlavaOnevisionModelOutputWithPast(BaseModelOutputWithPast):
     r"""
     past_key_values (`Cache`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
@@ -68,11 +60,6 @@ class LlavaOnevisionModelOutputWithPast(BaseModelOutputWithPast):
 
 
 @dataclass
-@auto_docstring(
-    custom_intro="""
-    Base class for LlavaOnevision causal language model (or autoregressive) outputs.
-    """
-)
 class LlavaOnevisionCausalLMOutputWithPast(ModelOutput):
     r"""
     loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
@@ -102,7 +89,6 @@ class LlavaOnevisionCausalLMOutputWithPast(ModelOutput):
     video_hidden_states: Optional[torch.FloatTensor] = None
 
 
-@auto_docstring
 class LlavaOnevisionPreTrainedModel(PreTrainedModel):
     config: LlavaOnevisionConfig
     base_model_prefix = ""
@@ -202,6 +188,7 @@ def image_size_to_num_patches(image_size, grid_pinpoints, patch_size: int):
     """
     if not isinstance(grid_pinpoints, list):
         raise TypeError("grid_pinpoints should be a list of tuples or lists")
+    # print("image_size:", image_size)
 
     # ! VERY IMPORTANT if image_size is tensor, must convert to into tuple, otherwise it will cause wrong calculate
     if not isinstance(image_size, (list, tuple)):
@@ -209,32 +196,15 @@ def image_size_to_num_patches(image_size, grid_pinpoints, patch_size: int):
             raise TypeError(f"image_size invalid type {type(image_size)} with value {image_size}")
         image_size = image_size.tolist()
 
-    if not isinstance(image_size[0], (list, tuple)):
-        if not isinstance(image_size[0], (torch.Tensor, np.ndarray)):
-            raise TypeError(f"image_size invalid type {type(image_size[0])} with value {image_size[0]}")
-        for img_s in image_size:
-            img_s = img_s.tolist()
-            
-    if isinstance(image_size[0], (tuple, list)):
-        best_resolution = select_best_resolution(image_size[0], grid_pinpoints)
-        height, width = best_resolution
-        num_patches = 0
-        for k in range(len(image_size)):
-            for i in range(0, height, patch_size):
-                for j in range(0, width, patch_size):
-                    num_patches += 1
-            # add the base patch
-        num_patches += 1
-    else: 
-        best_resolution = select_best_resolution(image_size, grid_pinpoints)
-        height, width = best_resolution
-        num_patches = 0
-        # consider change to ceil(height/patch_size)*ceil(width/patch_size) + 1
-        for i in range(0, height, patch_size):
-            for j in range(0, width, patch_size):
-                num_patches += 1
-        # add the base patch
-        num_patches += 1
+    best_resolution = select_best_resolution(image_size, grid_pinpoints)
+    height, width = best_resolution
+    num_patches = 0
+    # consider change to ceil(height/patch_size)*ceil(width/patch_size) + 1
+    for i in range(0, height, patch_size):
+        for j in range(0, width, patch_size):
+            num_patches += 1
+    # add the base patch
+    num_patches += 1
     return num_patches
 
 
@@ -277,11 +247,6 @@ def unpad_image(tensor, original_size):
     return unpadded_tensor
 
 
-@auto_docstring(
-    custom_intro="""
-    The Llava-Next model which consists of a vision backbone and a language model without language modeling head.
-    """
-)
 class LlavaOnevisionModel(LlavaOnevisionPreTrainedModel):
     _checkpoint_conversion_mapping = {"language_model.model": "language_model"}
 
@@ -505,8 +470,6 @@ class LlavaOnevisionModel(LlavaOnevisionPreTrainedModel):
 
         return special_image_mask, special_video_mask
 
-    @can_return_tuple
-    @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -677,11 +640,6 @@ class LlavaOnevisionModel(LlavaOnevisionPreTrainedModel):
         return image_features
 
 
-@auto_docstring(
-    custom_intro="""
-    The LLAVA-NeXT model which consists of a vision backbone and a language model.
-    """
-)
 class LlavaOnevisionForConditionalGeneration(LlavaOnevisionPreTrainedModel, GenerationMixin):
     _checkpoint_conversion_mapping = {
         "^language_model.model": "model.language_model",
@@ -748,8 +706,6 @@ class LlavaOnevisionForConditionalGeneration(LlavaOnevisionPreTrainedModel, Gene
     def multi_modal_projector(self):
         return self.model.multi_modal_projector
 
-    @can_return_tuple
-    @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,

@@ -1,11 +1,11 @@
-torch==2.4.1
+torch
 numpy==1.26.4
 torchvision
 transformers==4.48.1
 huggingface-hub
 peft
 accelerate
-datasets==3.3.2
+datasets
 scipy
 tqdm
 wandb
@@ -23,4 +23,3 @@ opencv-python
 decord
 hnswlib
 einops
-flash-attn

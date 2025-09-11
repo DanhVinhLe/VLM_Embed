@@ -5,7 +5,7 @@ from src.arguments import DataArguments, ModelArguments
 import torch
 from qwen_vl_utils import smart_resize
 from PIL import Image
-from src.model.processor import LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, PHI3V, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, process_vlm_inputs_fns, INTERN_VL3
+from src.model.processor import LLAVA_NEXT, QWEN2_VL, QWEN2_5_VL, PHI3V, QWEN2_VL_TOKENSELECTION, QWEN2_5_VL_TOKENSELECTION, process_vlm_inputs_fns, INTERN_VL3, LLAVA_ONEVISION
 
 from src.utils import print_rank, print_master
 from src.model.processor import process_vlm_inputs_fns
@@ -14,6 +14,7 @@ import io
 logger = logging.getLogger(__name__)
 PHI_IMAGE_TOKEN_MAX_INPUT_ID = int(1e9)
 LLAVA_IMAGE_TOKEN_ID = 32000
+LLAVA_ONEVISION_IMAGE_TOKEN_ID = 151646
 
 @dataclass
 class EvalCollator:

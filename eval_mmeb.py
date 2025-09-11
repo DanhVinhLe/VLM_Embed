@@ -21,6 +21,7 @@ from evaluation.mmeb_baselines.eval_utils import get_pred
 from src.utils import print_rank
 from src.model.processor import get_backbone_name, load_processor, COLPALI
 from torch.nn.utils.rnn import pad_sequence
+import shutil 
 
 
 def delete_pycache(root='.'):

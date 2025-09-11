@@ -1,0 +1,1 @@
+python  eval_mmeb.py  --model_name DeepGlint-AI/UniME-LLaVA-OneVision-7B --encode_output_path  ./MMEB-evaloutputs/Unime_7B/  --pooling  eos  --normalize  True  --bf16  --dataset_name  TIGER-Lab/MMEB-eval  --subset_name  ImageNet-1K  --dataset_split  test  --per_device_eval_batch_size  4  --image_dir  eval_images/

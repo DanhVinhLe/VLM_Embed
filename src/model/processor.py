@@ -283,46 +283,66 @@ def Llava_NEXT_process_fn(model_inputs: dict, processor, max_length=None):
     return inputs
 
 def Llava_ONEVISION_process_fn(model_inputs: dict, processor, max_length=None):
-    input_ids, pixel_values, image_sizes = [], [], []
-    texts, images = model_inputs['text'], model_inputs['images']
-    image_exists = False
-    vlm_image_token = VLM_IMAGE_TOKENS[LLAVA_ONEVISION]
-    # 1. iterate each pair and process (since processors do not support batch processing)
-    for text, image in zip(texts, images):
-        if image is None or (type(image)==list and (any(i is None for i in image))):
-            ## all image must be valid
-            inputs = processor(images=None, text=[text], return_tensors="np", max_length=max_length, truncation=True)
-            input_id = inputs["input_ids"].squeeze().tolist()
-            if isinstance(input_id, int):
-                # in case of empty string, only BOS is included
-                input_id = [input_id]
-            input_ids.append(input_id)
-            pixel_values.append(None)
-            image_sizes.append(None)
-        else:
-            image_exists = True
-            inputs = processor(images=image, text=[text], return_tensors="np", max_length=max_length, truncation=True)
-            input_ids.append(inputs["input_ids"].squeeze().tolist())
-            pixel_values.append(inputs['pixel_values'])
-            image_sizes.append(inputs['image_sizes'])
-            
-    # 2. padding inputs
-    batch_encoding = processor.tokenizer.pad({'input_ids': input_ids}, return_tensors="pt")
-    input_ids, attention_mask = batch_encoding['input_ids'], batch_encoding['attention_mask']
-    inputs = {
-        'input_ids': input_ids.long(),
-        'attention_mask': attention_mask.long(),
-        'texts': texts,
-        'images': images,
-    }
-    if image_exists:
-        inputs['pixel_values'] = pixel_values
-        inputs['image_sizes'] = image_sizes
-    else:
-        inputs['pixel_values'] = torch.zeros(input_ids.shape[0], 1)
-        inputs['image_sizes'] = torch.ones(input_ids.shape[0], 1)
-    return inputs
+    texts = model_inputs["text"]
+    images = model_inputs["images"]
 
+    # Trường hợp không có ảnh nào
+    if all(img is None or (isinstance(img, list) and all(i is None for i in img)) for img in images):
+        inputs = processor(
+            images=None,
+            text=texts,
+            return_tensors="pt",
+            max_length=max_length,
+            truncation=True,
+            padding=True,
+        )
+        batch_encoding = {
+            "input_ids": inputs["input_ids"].long(),
+            "attention_mask": inputs["attention_mask"].long(),
+            "texts": texts,
+            "images": images,
+        }
+        return batch_encoding
+
+    inputs = processor(
+        images=images,
+        text=texts,
+        return_tensors="pt",
+        max_length=max_length,
+        truncation=False,
+        padding=True,
+        input_data_format=ChannelDimension.FIRST,  # giữ format chuẩn (H, W, C)
+    )
+
+    # Chuẩn hoá image_sizes: đảm bảo [height, width]
+    image_sizes = []
+    for img_size in inputs["image_sizes"]:
+        if isinstance(img_size, (list, tuple)):
+            if len(img_size) == 2:
+                image_sizes.append(img_size)
+            elif len(img_size) == 1 and len(img_size[0]) == 2:
+                image_sizes.append(img_size[0])
+            else:
+                raise ValueError(f"Unexpected image_sizes format: {img_size}")
+        elif hasattr(img_size, "shape"):
+            if img_size.shape == (1, 2):
+                image_sizes.append(img_size[0])
+            elif img_size.shape == (2,):
+                image_sizes.append(img_size)
+            else:
+                raise ValueError(f"Unexpected image_sizes shape: {img_size.shape}")
+        else:
+            raise ValueError(f"Unknown image_sizes type: {type(img_size)}")
+
+    batch_encoding = {
+        "input_ids": inputs["input_ids"].long(),
+        "attention_mask": inputs["attention_mask"].long(),
+        "texts": texts,
+        "images": images,
+        "pixel_values": inputs["pixel_values"],   # đã được pad (batch_size, max_patches, C, H, W)
+        "image_sizes": image_sizes,
+    }
+    return batch_encoding
 
 def Phi3V_process_fn(model_inputs: dict, processor, max_length=None):
     input_ids, pixel_values, image_sizes, image_grid_thw = [], [], [], []
@@ -719,4 +739,5 @@ process_vlm_inputs_fns = {
     GME: Gme_process_fn,
     LamRA: Gme_process_fn,
     COLPALI: ColPali_process_fn,
+    LLAVA_ONEVISION: Llava_ONEVISION_process_fn,
 }

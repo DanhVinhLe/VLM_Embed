@@ -24,11 +24,10 @@ import numpy as np
 
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_processing_utils import select_best_resolution
-from transformers.image_utils import ImageInput, get_image_size, to_numpy_array
-from transformers.processing_utils import MultiModalData, ProcessingKwargs, ProcessorMixin, Unpack
+from transformers.image_utils import ImageInput, get_image_size, to_numpy_array, VideoInput
+from transformers.processing_utils import  ProcessingKwargs, ProcessorMixin, Unpack
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.utils import logging
-from transformers.video_utils import VideoInput
 
 
 logger = logging.get_logger(__name__)
@@ -162,6 +161,7 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         image_inputs = video_inputs = {}
 
         if images is not None:
+            # print("Processing images...")
             image_inputs = self.image_processor(images, **output_kwargs["images_kwargs"])
 
             batch_num_images = iter(image_inputs["batch_num_images"])
@@ -173,6 +173,7 @@ class LlavaOnevisionProcessor(ProcessorMixin):
             text, num_image_tokens = self._expand_image_tokens(
                 text, image_sizes, height, width, self.image_token, batch_num_images
             )
+            
 
         if videos is not None:
             video_inputs = self.video_processor(videos, **output_kwargs["videos_kwargs"])
@@ -327,7 +328,7 @@ class LlavaOnevisionProcessor(ProcessorMixin):
                 batch_num_image_tokens.append(num_image_tokens)
             vision_data.update({"num_image_tokens": batch_num_image_tokens, "num_image_patches": num_image_patches})
 
-        return MultiModalData(**vision_data)
+        return vision_data
 
 
 __all__ = ["LlavaOnevisionProcessor"]
