@@ -28,7 +28,12 @@ class ModelArguments:
     vis_skip_layer: str = field(default='[1,32,0]', metadata={"help": "Specify the layers of the vision model to skip for token selection"})
     #! new args
     init_lora_model: bool = field(default=False, metadata={"help": "initializing with lora model"})
-
+    # distiller args:
+    student_backbone: str = field(default=None, metadata={"help": "student model backbone"})
+    teacher_backbone: str = field(default=None, metadata={"help": "teacher model backbone"})
+    student_model_path: str = field(default=None, metadata={"help": "student model name or path"})
+    teacher_model_name: str = field(default=None, metadata={"help": "teacher model name or path"})
+    
 
 @dataclass
 class DataArguments:
