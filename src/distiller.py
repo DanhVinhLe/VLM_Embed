@@ -1,4 +1,6 @@
 import os
+from typing import Dict, Tuple, Optional
+import time
 import json
 import torch
 import torch.nn as nn
@@ -15,7 +17,6 @@ from peft import (
     TaskType,
     get_peft_model
 )
-from utils import log_rank
 from src.model.model import MMEBModel
 from src.model.processor import load_processor, get_backbone_name, process_vlm_inputs_fns, backbone2model, \
     LLAVA_NEXT, QWEN2_VL, LLAVA_ONEVISION, QWEN2_5_VL_TOKENSELECTION, QWEN2_5_VL, QWEN2_VL_TOKENSELECTION
@@ -54,6 +55,8 @@ def add_distiller_arguments(parser):
                        help='Temperature for similarity')
     parser.add_argument('--model_type', type=str, default=None,
                        help='Model type')
+    parser.add_argument('--device', type=str, default='cuda',
+                       help='Device to use (e.g., "cuda", "cpu")')
     
     return parser
 
@@ -105,17 +108,30 @@ class Distiller(nn.Module):
         student = MMEBModel.load(model_args, is_trainable=True)
         return student 
     
-def main():
-    parser = argparse.ArgumentParser(description="Distiller Training")
-    parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
-    parser = add_distiller_arguments(parser)
-    parser.add_argument('')
+    def student_forward(self, qry: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]= None, *args, **kwargs):
+        qry_reps = self.student.encode_input(qry) if qry is not None else None
+        tgt_reps = self.student.encode_input(tgt) if tgt is not None else None
+        
+        if qry_reps is None or tgt_reps is None:
+            return {"qry_reps": qry_reps, "tgt_reps": tgt_reps}
+        
+        scores = self.student.compute_similarity(qry_reps, tgt_reps)
+        scores = scores.view(qry_reps.size(0), -1)
+        target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
+        target = target * (qry_reps.size(0) // tgt_reps.size(0))
+        loss = nn.CrossEntropyLoss()(scores / self.temperature, target)
+        
+        return {"contrastive_loss": loss, "stu_qry_reps": qry_reps, "stu_tgt_reps": tgt_reps}
     
-    args = parser.parse_args()
-    device = torch.device(args.device)
-    distiller = Distiller(args, device)
-    print(f"Distiller initialized on device: {distiller.device}")
-    print(f"Loaded student model: {args.student_model_path}")
-    print(f"Loaded teacher model: {args.teacher_model_path}")
-    print(f"Student device: {distiller.student.device}")
-    print(f"Teacher device: {distiller.teacher.device}")
+    def teacher_forward(self, qry: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]= None, *args, **kwargs):
+        with torch.no_grad():
+            qry_reps = self.teacher.encode_input(qry) if qry is not None else None
+            tgt_reps = self.teacher.encode_input(tgt) if tgt is not None else None
+            
+            if qry_reps is None or tgt_reps is None:
+                return {"qry_reps": qry_reps, "tgt_reps": tgt_reps}
+        
+        return {"tea_qry_reps": qry_reps, "tea_tgt_reps": tgt_reps}
+    
+    
+    
