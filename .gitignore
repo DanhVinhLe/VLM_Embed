@@ -3,3 +3,4 @@
 *.mp4
 *.jpeg
 __pycache__
+.venv

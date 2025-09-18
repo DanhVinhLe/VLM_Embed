@@ -103,6 +103,7 @@ class MMEBModel(nn.Module):
             if hasattr(input, 'pixel_values'):
                 input['pixel_values'] = input['pixel_values'].squeeze(1)
                 input['image_sizes'] = input['image_sizes'].squeeze(1)
+            # print(f"Pixels values shape: {input['pixel_values'].shape if 'pixel_values' in input else None}")
             hidden_states = self.encoder(**input, return_dict=True, output_hidden_states=True)
             hidden_states = hidden_states.hidden_states[-1]
             pooled_output = self._pooling(hidden_states, input['attention_mask'])
@@ -379,6 +380,7 @@ class MMEBModel(nn.Module):
         self.encoder.save_pretrained(output_dir)
 
     def forward(self, qry: Dict[str, Tensor] = None, tgt: Dict[str, Tensor] = None, *args, **kwargs):
+        # print(f"qry keys: {qry.keys() if qry else None}, tgt keys: {tgt.keys() if tgt else None}")
         qry_reps = self.encode_input(qry) if qry else None  # (bsz_per_device, dim)
         tgt_reps = self.encode_input(tgt) if tgt else None # (bsz_per_device, dim)
 

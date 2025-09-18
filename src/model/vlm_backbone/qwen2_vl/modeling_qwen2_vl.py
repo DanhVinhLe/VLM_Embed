@@ -1646,7 +1646,9 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel, GenerationMixin):
 
                         valid_pixel_values = valid_pixel_values.type(self.visual.get_dtype())
                         image_embeds = self.visual(valid_pixel_values, grid_thw=valid_grid_thw)
+                        # print(f"image_embeds shape", image_embeds.shape)
                         n_image_tokens = (input_ids_w_image == self.config.image_token_id).sum().item()
+                        # print(f"n_image_tokens", n_image_tokens)
                         n_image_features = image_embeds.shape[0]
                         if n_image_tokens != n_image_features:
                             raise ValueError(
@@ -1660,6 +1662,7 @@ class Qwen2VLForConditionalGeneration(Qwen2VLPreTrainedModel, GenerationMixin):
                         )
                         image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
                         inputs_embeds_w_image = inputs_embeds_w_image.masked_scatter(image_mask, image_embeds)
+                        print(f"inputs_embeds_w_image shape", inputs_embeds_w_image.shape)
                         merged_inputs_embeds.append(inputs_embeds_w_image)
                     if len(idx_wo_image):
                         inputs_embeds_wo_image = torch.stack([inputs_embeds[i] for i in idx_wo_image])

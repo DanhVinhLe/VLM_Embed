@@ -121,15 +121,23 @@ def load_processor(model_args, data_args=None):
         processor.tokenizer.padding_side = "right"
     elif model_args.model_backbone == LLAVA_NEXT:
         from src.model.vlm_backbone.llava_next.processing_llava_next import LlavaNextProcessor
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+        tokenizer.padding_side = "left"
         processor = LlavaNextProcessor.from_pretrained(
             model_name_or_path,
-            trust_remote_code=True
+            trust_remote_code=True,
+            tokenizer=tokenizer
         )
     elif model_args.model_backbone == LLAVA_ONEVISION:
         from src.model.vlm_backbone.llava_onevision.processing_llava_onevision import LlavaOnevisionProcessor
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+        tokenizer.padding_side = "left"
         processor = LlavaOnevisionProcessor.from_pretrained(
             model_name_or_path,
-            trust_remote_code=True
+            trust_remote_code=True,
+            tokenizer=tokenizer
         )
     elif model_args.model_backbone in [QWEN2_VL, GME, LamRA]:
         from src.model.vlm_backbone.qwen2_vl.processing_qwen2_vl import Qwen2VLProcessor
@@ -287,6 +295,7 @@ def Llava_NEXT_process_fn(model_inputs: dict, processor, max_length=None):
 def Llava_ONEVISION_process_fn(model_inputs: dict, processor, max_length=None):
     texts = model_inputs["text"]
     images = model_inputs["images"]
+    # print(f"Processing texts: {texts}")
 
     # Trường hợp không có ảnh nào
     if all(img is None or (isinstance(img, list) and all(i is None for i in img)) for img in images):
@@ -311,12 +320,15 @@ def Llava_ONEVISION_process_fn(model_inputs: dict, processor, max_length=None):
         text=texts,
         return_tensors="pt",
         max_length=max_length,
-        truncation=False,
+        truncation=True,
         padding=True,
         input_data_format=ChannelDimension.LAST,  # giữ format chuẩn (H, W, C)
     )
-
+    # print(f"Processor output keys: {inputs.keys()}")
+    # print(f"Input ids: {inputs['input_ids']}")
+    # print(f"Pixel values shape: {inputs['pixel_values'].shape}")
     # Chuẩn hoá image_sizes: đảm bảo [height, width]
+    # print(f"Input_ids shape: {inputs['input_ids'].shape}")
     image_sizes = []
     for img_size in inputs["image_sizes"]:
         if isinstance(img_size, (list, tuple)):
@@ -345,6 +357,7 @@ def Llava_ONEVISION_process_fn(model_inputs: dict, processor, max_length=None):
         # "image_sizes": image_sizes,
         "image_sizes": torch.tensor(np.array(image_sizes)).long(),
     }
+    # print("Last 10 input_ids:", batch_encoding["input_ids"][:, -10:])
     return batch_encoding
 
 def Phi3V_process_fn(model_inputs: dict, processor, max_length=None):
@@ -370,6 +383,7 @@ def Phi3V_process_fn(model_inputs: dict, processor, max_length=None):
             pixel_values.append(inputs['pixel_values'])
             if 'image_sizes' in inputs:
                 image_sizes.append(inputs['image_sizes'])
+                # print(f"Image sizes: {inputs['image_sizes']}")
             if 'image_grid_thw' in inputs:
                 image_grid_thw.append(inputs['image_grid_thw'])
 
@@ -383,6 +397,7 @@ def Phi3V_process_fn(model_inputs: dict, processor, max_length=None):
         'images': images,
     }
     # 3. special postcare for mixed batch (examples w/ and w/o images in the same batch)
+    
     if image_exists:
         # add them to inputs
         inputs['pixel_values'] = pixel_values
@@ -403,6 +418,7 @@ def Qwen2_VL_process_fn(model_inputs: dict, processor: Qwen2VLProcessor, max_len
     # import ipdb; ipdb.set_trace()
     # 1. iterate each pair and process (since processors do not support batch processing)
     for text, images in zip(texts, visual_inputs):
+        # print(f"Processing text: {text}")
         if images is None or (type(images)==list and any(i is None for i in images)):
             # all images must be valid
             inputs = processor(text=[text], images=None, return_tensors="np", max_length=max_length, truncation=True)
@@ -420,6 +436,7 @@ def Qwen2_VL_process_fn(model_inputs: dict, processor: Qwen2VLProcessor, max_len
                 if isinstance(images, PIL.Image.Image):
                     # images is a single image
                     images = [images]
+                    
                 for iid, image in enumerate(images):
                     # rare case in MMEB eval: resize to 28*28 if either w or h is smaller than 28
                     if image.size[0] < 28 or image.size[1] < 28:
@@ -432,6 +449,11 @@ def Qwen2_VL_process_fn(model_inputs: dict, processor: Qwen2VLProcessor, max_len
             else:
                 raise NotImplementedError
             input_ids.append(inputs["input_ids"].squeeze().tolist())
+            # print("Inputs length:", len(inputs["input_ids"].squeeze().tolist()))
+            # print("Input ids:", inputs["input_ids"].squeeze().tolist())
+            # print("Inputs keys:", inputs.keys())
+            # print(f"Last 10 input_ids: {inputs['input_ids'].squeeze().tolist()[-10:]}")
+            # print(f"Shape of input_ids: {np.array(input_ids).shape}, pixel_values: {inputs['pixel_values'].shape if 'pixel_values' in inputs else None}")
             if 'pixel_values' in inputs:
                 pixel_values.append(inputs['pixel_values'])
                 image_grid_thw.append(inputs['image_grid_thw'])
@@ -445,6 +467,7 @@ def Qwen2_VL_process_fn(model_inputs: dict, processor: Qwen2VLProcessor, max_len
 
     # 2. padding inputs
     batch_encoding = processor.tokenizer.pad({'input_ids': input_ids}, return_tensors="pt")
+    # print(f"Padded input_ids: {batch_encoding['input_ids']}")
     input_ids, attention_mask = batch_encoding['input_ids'], batch_encoding['attention_mask']
     # manually enforce long type due to:
     # (1) [rank7]: RuntimeError: Expected tensor for argument #1 'indices' to have one of the following scalar types: Long, Int; but got torch.cuda.FloatTensor instead (while checking arguments for embedding)
