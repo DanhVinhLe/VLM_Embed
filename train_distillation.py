@@ -6,6 +6,7 @@ from src.utils import print_rank, print_master
 import time 
 import os
 import sys
+from tqdm import tqdm 
 
 import torch
 import torch.nn as nn 
@@ -66,6 +67,7 @@ def finetune(
     
     accelerator = Accelerator(
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
+        mixed_precision="bf16",
         log_with="wandb" if training_args.report_to == "wandb" else None,
     )
     train_dataloader = DataLoader(
@@ -75,14 +77,16 @@ def finetune(
         shuffle=True, 
         drop_last=True,
     )
-    distiller.student, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        distiller.student, optimizer, train_dataloader, lr_scheduler
+    distiller, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        distiller, optimizer, train_dataloader, lr_scheduler
     )
-    distiller.teacher.to(accelerator.device)
+    # distiller.teacher.to(accelerator.device)
     for param in distiller.teacher.parameters():
         param.requires_grad = False
     distiller.teacher.eval()
     distiller.student.train()
+    print(f"Number of parameters in student model: {sum(p.numel() for p in distiller.student.parameters() if p.requires_grad)}")
+    print(f"Number of parameters in teacher model: {sum(p.numel() for p in distiller.teacher.parameters() if p.requires_grad)}")
     
     if training_args.report_to == "wandb" and accelerator.is_main_process:
         wandb.init(
@@ -95,8 +99,6 @@ def finetune(
                 "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
             }
         )
-    
-    
     
     step = 0
     logging_output = {
@@ -115,6 +117,13 @@ def finetune(
         end_epoch = False
         epoch_step = 0
         epoch_loss, epoch_contrastive_loss, epoch_kd_loss = 0, 0, 0
+        
+        progress_bar = tqdm(
+            total=len(train_dataloader)//training_args.gradient_accumulation_steps,
+            desc=f"Epoch {epoch+1}",
+            disable=not accelerator.is_main_process
+        )
+        
         train_iter = iter(train_dataloader)
         
         while True:
@@ -170,36 +179,40 @@ def finetune(
             epoch_contrastive_loss += sum(contrastive_losses)
             epoch_kd_loss += sum(kd_losses)
             
-            logging_output['loss'].append(batch_loss)
-            logging_output['contrastive_loss'].append(batch_contrastive_loss)
-            logging_output['kd_loss'].append(batch_kd_loss)
-            logging_output['step_time'].append(time.time() - global_st_time)
+            # logging_output['loss'].append(batch_loss)
+            # logging_output['contrastive_loss'].append(batch_contrastive_loss)
+            # logging_output['kd_loss'].append(batch_kd_loss)
+            # logging_output['step_time'].append(time.time() - global_st_time)
             
             if accelerator.is_main_process and step % training_args.logging_steps == 0:
-                avg_micro_step_time = sum(logging_output['micro_step_time'])/len(logging_output['micro_step_time'])
-                avg_step_time = sum(logging_output['step_time'])/len(logging_output['step_time'])
+                # avg_micro_step_time = sum(logging_output['micro_step_time'])/len(logging_output['micro_step_time'])
+                # avg_step_time = sum(logging_output['step_time'])/len(logging_output['step_time'])
                 
-                total_step = len(train_dataloader) // training_args.gradient_accumulation_steps * training_args.num_train_epochs
-                remaining_steps = total_step - step
-                eta_seconds = remaining_steps * avg_step_time
-                eta_hours = eta_seconds / 3600
-                print_master(
-                    f"Epoch {epoch + 1} | Step {step} | "
-                    f"Loss: {batch_loss:.4f} | Contrastive Loss: {batch_contrastive_loss:.4f} | KD Loss: {batch_kd_loss:.4f} | "
-                    f"LR: {optimizer.param_groups[0]['lr']:.6f} | "
-                    f"Micro Step Time: {avg_micro_step_time:.4f}s | "
-                    f"Step Time: {avg_step_time:.4f}s | "
-                    f"ETA: {eta_hours:.2f}h"
-                )
-                
+                # total_step = len(train_dataloader) // training_args.gradient_accumulation_steps * training_args.num_train_epochs
+                # remaining_steps = total_step - step
+                # eta_seconds = remaining_steps * avg_step_time
+                # eta_hours = eta_seconds / 3600
+                # print_master(
+                #     f"Epoch {epoch + 1} | Step {step} | "
+                #     f"Loss: {batch_loss:.4f} | Contrastive Loss: {batch_contrastive_loss:.4f} | KD Loss: {batch_kd_loss:.4f} | "
+                #     f"LR: {optimizer.param_groups[0]['lr']:.6f} | "
+                #     f"Micro Step Time: {avg_micro_step_time:.4f}s | "
+                #     f"Step Time: {avg_step_time:.4f}s | "
+                #     f"ETA: {eta_hours:.2f}h"
+                # )
+                progress_bar.set_postfix({
+                    "loss": f"{batch_loss:.4f}",
+                    "contrastive_loss": f"{batch_contrastive_loss:.4f}",
+                    "kd_loss": f"{batch_kd_loss:.4f}",
+                    "lr": f"{optimizer.param_groups[0]['lr']:.6f}",
+                })
+                progress_bar.update(1)
                 if training_args.report_to == "wandb":
                     wandb.log({
                         "train/loss": batch_loss,
                         "train/contrastive_loss": batch_contrastive_loss,
                         "train/kd_loss": batch_kd_loss,
                         "train/lr": optimizer.param_groups[0]['lr'],
-                        "train/micro_step_time": avg_micro_step_time,
-                        "train/step_time": avg_step_time,
                         "train/epoch": epoch + 1,
                         "train/global_step": step,
                     })
