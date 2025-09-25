@@ -1,6 +1,6 @@
-torch
+# torch
 numpy==1.26.4
-torchvision
+# torchvision
 transformers==4.56.1
 huggingface-hub
 peft

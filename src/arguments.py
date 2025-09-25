@@ -29,23 +29,15 @@ class ModelArguments:
     #! new args
     init_lora_model: bool = field(default=False, metadata={"help": "initializing with lora model"})
     # distiller args:
-    # student_backbone: str = field(default=None, metadata={"help": "student model backbone"})
-    # teacher_backbone: str = field(default=None, metadata={"help": "teacher model backbone"})
-    # student_model_path: str = field(default=None, metadata={"help": "student model name or path"})
-    # teacher_model_path: str = field(default=None, metadata={"help": "teacher model name or path"})
-    # train_student_lora: bool = field(default=False, metadata={"help": "whether to train student lora"})
-    # teacher_lora: bool = field(default=False, metadata={"help": "whether teacher is lora"})
-    # student_lora_r: int = field(default=16, metadata={"help": "student lora r"})
-    # student_lora_alpha: int = field(default=64, metadata={"help": "student lora alpha"})
-    # student_lora_dropout: float = field(default=0.1, metadata={"help": "student lora dropout"})
-    # student_lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj", metadata={"help": "student lora target modules"})
-    # student_pooling: str = field(default='last', metadata={"help": "pooling method for student encoder"})
-    # student_normalize: bool = field(default=False, metadata={"help": "normalize query and passage representations for student"})
-    # teacher_lora_r: int = field(default=16, metadata={"help": "teacher lora r"})
-    # teacher_lora_alpha: int = field(default=64, metadata={"help": "teacher lora alpha"})
-    # teacher_lora_dropout: float = field(default=0.1, metadata={"help": "teacher lora dropout"})
-    # teacher_lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj", metadata={"help": "teacher lora target modules"})
-    # teacher_pooling: str = field(default='last', metadata={"help": "pooling method for teacher encoder"})
+    teacher_backbone: str = field(default=None, metadata={"help": "teacher model backbone"})
+    teacher_model_name: str = field(default=None, metadata={"help": "teacher model name or path"})
+    teacher_lora: bool = field(default=False, metadata={"help": "whether teacher is lora"})
+    teacher_lora_r: int = field(default=16, metadata={"help": "teacher lora r"})
+    teacher_lora_alpha: int = field(default=64, metadata={"help": "teacher lora alpha"})
+    teacher_lora_dropout: float = field(default=0.1, metadata={"help": "teacher lora dropout"})
+    teacher_lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj", metadata={"help": "teacher lora target modules"})
+    teacher_pooling: str = field(default='last', metadata={"help": "pooling method for teacher encoder"})
+    teacher_normalize: bool = field(default=False, metadata={"help": "normalize query and passage representations for teacher"})
 
 @dataclass
 class DataArguments:
@@ -96,6 +88,11 @@ class TrainingArguments(TrainingArguments):
     gc_dynamic_limit: int = field(default=125, metadata={"help": "gc_chunk default limit - (128, 125) sized matrices works for Qwen2b. gc_dynamic_limit would be 125 and gc_p|q_chunk_size would be 128"})
     #!new kd loss weight
     kd_weight: float = field(default=0.01, metadata={"help": "weight of kd loss in total loss"})
+    rkd_distance_weight: float = field(default=1.0, metadata={"help": "weight of distance loss in total kd loss"})
+    rkd_angle_weight: float = field(default=2.0, metadata={"help": "weight of angle loss in total kd loss"})
+    kd_loss_type: str = field(default="contrastive_rkd", metadata={"help": "type of kd loss, current only support RKD"})
+    ds_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
+    
 @dataclass
 class MTEBArguments:
     device: str = field(default="cuda", metadata={"help": "use cuda for single GPU inference, if multiple GPUs are available it will use DP automatically"})

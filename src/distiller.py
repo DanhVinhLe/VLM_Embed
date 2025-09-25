@@ -57,7 +57,27 @@ class Distiller(nn.Module):
         self.training_args = training_args
         self.device = device
         self.student = self._load_student()
+        self.teacher = self._load_teacher()
         self.temperature = model_args.temperature
+    
+    def _create_model_args(self, model_type='teacher'):
+        if model_type == 'teacher': 
+            model_args = ModelArguments(
+                model_name=self.model_args.teacher_model_name, 
+                checkpoint_path=getattr(self.model_args, 'teacher_checkpoint_path', None),
+                lora=self.model_args.teacher_lora,
+                lora_r=self.model_args.teacher_lora_r,
+                lora_alpha=self.model_args.teacher_lora_alpha,
+                lora_dropout=self.model_args.teacher_lora_dropout,
+                lora_target_modules=self.model_args.teacher_lora_target_modules,
+                pooling=self.model_args.teacher_pooling,
+                normalize=self.model_args.teacher_normalize,
+                model_type=self.model_args.teacher_backbone,
+            )
+        else:
+            print_rank("Not implemented student model args creation.")
+            raise NotImplementedError
+        return model_args
     
     def _load_student(self):
         print("Load student with lora rank:", self.model_args.lora_r)
@@ -65,49 +85,38 @@ class Distiller(nn.Module):
         student = MMEBModel.build(self.model_args, is_trainable=True)
         print("Student model built.")
         return student 
+    
+    def _load_teacher(self):
+        model_args = self._create_model_args('teacher')
+        print("Load teacher with lora rank:", model_args.lora_r)
+        print("Teacher use lora:", model_args.lora)
+        teacher = MMEBModel.load(model_args, is_trainable=False)
+        for param in teacher.parameters():
+            param.requires_grad = False
+        print("Teacher model loaded.")
+        return teacher
+    
     def get_student_processor(self):
         processor = load_processor(self.model_args, None)
         print("Student processor loaded.")
         return processor
+
+    def get_teacher_processor(self):
+        model_args = self._create_model_args('teacher')
+        processor = load_processor(model_args, None)
+        print("Teacher processor loaded.")
+        return processor
     
-    def student_forward(self, qry: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor]= None, *args, **kwargs):
-        qry_reps = self.student.encode_input(qry) if qry is not None else None
-        tgt_reps = self.student.encode_input(tgt) if tgt is not None else None
-        
-        scores = self.student.compute_similarity(qry_reps, tgt_reps)
-        scores = scores.view(qry_reps.size(0), -1)
-        target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
-        target = target * (qry_reps.size(0) // tgt_reps.size(0))
-        loss = nn.CrossEntropyLoss()(scores / self.temperature, target)
-        
-        return {"contrastive_loss": loss, "stu_qry_reps": qry_reps, "stu_tgt_reps": tgt_reps}
-    
-    def compute_loss(self, teacher_qry_reps, teacher_pos_reps, stu_qry: Dict[str, torch.Tensor], stu_tgt: Dict[str, torch.Tensor]= None,
-                     *args, **kwargs):
-        student_outputs = self.student_forward(stu_qry, stu_tgt, *args, **kwargs)
-        
-        loss = student_outputs["contrastive_loss"]
-        kd_loss_1 = nn.MSELoss()(torch.matmul(student_outputs["stu_qry_reps"], student_outputs["stu_qry_reps"].t()),
-                                 torch.matmul(teacher_qry_reps, teacher_qry_reps.t()))
-        kd_loss_2 = nn.MSELoss()(torch.matmul(student_outputs["stu_tgt_reps"], student_outputs["stu_tgt_reps"].t()),
-                                 torch.matmul(teacher_pos_reps, teacher_pos_reps.t()))
-        kd_loss = self.training_args.kd_weight * (kd_loss_1 + kd_loss_2)
-        loss += kd_loss
-        
-        return {
-            'loss': loss,
-            'contrastive_loss': student_outputs["contrastive_loss"],
-            'kd_loss': kd_loss
-        }
-    def forward(self, teacher_qry_reps, teacher_pos_reps, stu_qry: Dict[str, torch.Tensor], stu_tgt: Dict[str, torch.Tensor]= None,
-                *args, **kwargs):
-        return self.compute_loss(teacher_qry_reps, teacher_pos_reps, stu_qry, stu_tgt, *args, **kwargs)
+    def forward(self, criterion, batch):
+        loss = criterion(self, batch)
+        return loss
 
 class DistillationCollator:
-    def __init__(self, student_processor: ProcessorMixin, 
+    def __init__(self, student_processor: ProcessorMixin, teacher_processor: ProcessorMixin,
                  model_args: ModelArguments, data_args: DataArguments, training_args: TrainingArguments,
                  batch_size: Optional[int] = None):
         self.student_processor = student_processor
+        self.teacher_processor = teacher_processor
         self.model_args = model_args
         self.data_args = data_args
         self.training_args = training_args
@@ -138,6 +147,9 @@ class DistillationCollator:
         student_qry_inputs = self._get_batch_inputs(examples, "student_query_text", "student_query_image")
         student_pos_inputs = self._get_batch_inputs(examples, "student_pos_text", "student_pos_image")
 
+        teacher_qry_inputs = self._get_batch_inputs(examples, "teacher_query_text", "teacher_query_image")
+        teacher_pos_inputs = self._get_batch_inputs(examples, "teacher_pos_text", "teacher_pos_image")
+
         bs = len(student_qry_inputs['text'])
         assert bs > 0, 'An empty batch is detected!'
         
@@ -145,20 +157,22 @@ class DistillationCollator:
             raise RuntimeError(f"Expected batch size {self.batch_size}, but got {bs}.")
         
         process_student_fn = process_vlm_inputs_fns[self.model_args.model_backbone]
+        process_teacher_fn = process_vlm_inputs_fns[self.model_args.teacher_backbone]
+        
         processed_student_qry_inputs = process_student_fn(student_qry_inputs, processor=self.student_processor, max_length=self.data_args.max_len)
         processed_student_pos_inputs = process_student_fn(student_pos_inputs, processor=self.student_processor, max_length=self.data_args.max_len)
-
-        # processed_student_qry_inputs['text'] = [e['student_query_text'] for e in examples]
-        # processed_student_pos_inputs['text'] = [e['student_pos_text'] for e in examples]
-        # processed_student_qry_inputs['global_dataset_name'] = [e['global_dataset_name'] for e in examples]
-        # processed_student_pos_inputs['global_dataset_name'] = [e['global_dataset_name'] for e in examples]
-        teacher_qry_reps = torch.stack([e["teacher_qry_reps"] for e in examples]).to(dtype=torch.bfloat16)
-        teacher_pos_reps = torch.stack([e["teacher_pos_reps"] for e in examples]).to(dtype=torch.bfloat16)
+        processed_teacher_qry_inputs = process_teacher_fn(teacher_qry_inputs, processor=self.teacher_processor, max_length=self.data_args.max_len)
+        processed_teacher_pos_inputs = process_teacher_fn(teacher_pos_inputs, processor=self.teacher_processor, max_length=self.data_args.max_len)
+        
         return {
-            'qry': processed_student_qry_inputs,
-            'pos': processed_student_pos_inputs,
-            'teacher_qry_reps': teacher_qry_reps,
-            'teacher_pos_reps': teacher_pos_reps,
+            'student_inputs':{
+                'qry': processed_student_qry_inputs,
+                'pos': processed_student_pos_inputs
+            },
+            'teacher_inputs':{
+                'qry': processed_teacher_qry_inputs,
+                'pos': processed_teacher_pos_inputs
+            }
         }
         
 class DistillationDataset(Dataset):
@@ -174,16 +188,6 @@ class DistillationDataset(Dataset):
                 split=f"{self.data_args.dataset_split}"
             )
             subset_data = subset_data.remove_columns(set(['neg_text', 'neg_image_path']) & set(subset_data.column_names))
-            encoded_file_path = f"/workspace/VLM_Embed/encoded_data/B2_Qwen2_2B/{subset}_{self.data_args.dataset_split}_encoded.pkl"
-            with open(encoded_file_path, "rb") as f:
-                data = pickle.load(f)
-            qry_reps = data['qry_reps']
-            pos_reps = data['tgt_reps']
-            
-            assert len(subset_data) == len(qry_reps) == len(pos_reps), "Mismatch in dataset length!"
-            subset_data = subset_data.add_column("teacher_qry_reps", qry_reps.tolist())
-            subset_data = subset_data.add_column("teacher_pos_reps", pos_reps.tolist())
-            
             train_data.append(subset_data)
             
         self.train_data = concatenate_datasets(train_data)
@@ -217,36 +221,50 @@ class DistillationDataset(Dataset):
             pos_image_paths = [pos_image_paths]
             
         student_qry_texts, student_qry_images, student_pos_texts, student_pos_images = [], [], [], []
+        teacher_qry_texts, teacher_qry_images, teacher_pos_texts, teacher_pos_images = [], [], [], []
                 
         student_backbone = self.model_args.model_backbone
+        teacher_backbone = self.model_args.teacher_backbone
 
-        for qry_text, qry_image_path, pos_text, pos_image_path \
-            in zip(qry_texts, qry_image_paths, pos_texts, pos_image_paths):
+        for qry_text, qry_image_path, pos_text, pos_image_path in zip(qry_texts, qry_image_paths, pos_texts, pos_image_paths):
             # instructions were hardcoded with Phi3 image special tokens
             # Update image token for llava and colqwen2, qwenvl
             if student_backbone != PHI3V:
                 stu_qry_text = qry_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone])
                 stu_pos_text = pos_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone])
-                # stu_neg_text = neg_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone]) if neg_text else None
             stu_qry_image = self._get_image(qry_image_path)
             stu_pos_image = self._get_image(pos_image_path)
-            # stu_neg_image = self._get_image(neg_image_path) if neg_image_path else None
+            
             if (not stu_qry_text and not stu_qry_image) or (not stu_pos_text and not stu_pos_image):
                 print("empty inputs")
                 continue
+            
             student_qry_texts.append(stu_qry_text)
             student_qry_images.append(stu_qry_image)
             student_pos_texts.append(stu_pos_text)
             student_pos_images.append(stu_pos_image)
         
-        teacher_qry_reps = torch.tensor(self.train_data[data_idx]['teacher_qry_reps'], dtype=torch.float16)
-        teacher_pos_reps = torch.tensor(self.train_data[data_idx]['teacher_pos_reps'], dtype=torch.float16)
+            if teacher_backbone != PHI3V:
+                teacher_qry_text = [t.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[teacher_backbone]) for t in qry_texts]
+                teacher_pos_text = [t.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[teacher_backbone]) for t in pos_texts]
+            teacher_qry_image = self._get_image(qry_image_path)
+            teacher_pos_image = self._get_image(pos_image_path)
+
+            if (not teacher_qry_text and not teacher_qry_image) or (not teacher_pos_text and not teacher_pos_image):
+                print("empty inputs")
+                continue
+            teacher_qry_texts.append(teacher_qry_text)
+            teacher_qry_images.append(teacher_qry_image)
+            teacher_pos_texts.append(teacher_pos_text)
+            teacher_pos_images.append(teacher_pos_image)
             
         return {
             "student_query_text": student_qry_texts,
             "student_query_image": student_qry_images,
             "student_pos_text": student_pos_texts,
             "student_pos_image": student_pos_images,
-            "teacher_qry_reps": teacher_qry_reps,
-            "teacher_pos_reps": teacher_pos_reps
+            "teacher_query_text": teacher_qry_texts,
+            "teacher_query_image": teacher_qry_images,
+            "teacher_pos_text": teacher_pos_texts,
+            "teacher_pos_image": teacher_pos_images,
         }
