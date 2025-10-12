@@ -38,16 +38,26 @@ from PIL import Image
 def process_image(image, resolution, max_dim=1344):
     if image is None:
         return None
+
+    width, height = image.size
+    max_side = max(width, height)
+
     if resolution == "high":
-        image = image.resize((1344, 1344))
+        target_max = 1344
     elif resolution == "mid":
-        image = image.resize((672, 672))
+        target_max = 672
     elif resolution == "low":
-        image = image.resize((128, 128))
+        target_max = 256
     else:
-        cur_max_dim = max(image.size)
-        if cur_max_dim > max_dim:
-            image = image.resize((max_dim, max_dim))
+        target_max = max_dim
+
+    # Tính tỉ lệ scale sao cho cạnh lớn nhất = target_max
+    if max_side > target_max:
+        scale = target_max / max_side
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        image = image.resize((new_width, new_height))
+
     return image
 
 class Distiller(nn.Module):
@@ -72,7 +82,7 @@ class Distiller(nn.Module):
                 lora_target_modules=self.model_args.teacher_lora_target_modules,
                 pooling=self.model_args.teacher_pooling,
                 normalize=self.model_args.teacher_normalize,
-                model_type=self.model_args.teacher_backbone,
+                model_backbone=self.model_args.teacher_backbone,
             )
         else:
             print_rank("Not implemented student model args creation.")

@@ -96,7 +96,7 @@ class ContrastiveLossWithRKD(nn.Module):
         psi_teacher = self.angle_potentials(teacher_repr)
         
         n = psi_student.size(0)
-        mask = torch.ones((n, n, n), device=torch.bool, device=psi_student.device)
+        mask = torch.ones((n, n, n), dtype=torch.bool, device=psi_student.device)
         idx = torch.arange(n, device=psi_student.device)
         mask[idx, idx, :] = 0
         mask[idx, :, idx] = 0

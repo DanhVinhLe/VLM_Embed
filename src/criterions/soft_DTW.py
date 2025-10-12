@@ -250,7 +250,10 @@ class _SoftDTW(Function):
         dtype = D.dtype
         gamma = torch.Tensor([gamma]).to(dev).type(dtype)  # dtype fixed
         bandwidth = torch.Tensor([bandwidth]).to(dev).type(dtype)
-        D_ = D.detach().cpu().numpy()
+        if D.dtype == torch.bfloat16 or D.dtype == torch.float16:
+            D_ = D.detach().to(torch.float32).cpu().numpy()
+        else:
+            D_ = D.detach().cpu().numpy()
         g_ = gamma.item()
         b_ = bandwidth.item()
         R = torch.Tensor(compute_softdtw(D_, g_, b_)).to(dev).type(dtype)
@@ -262,8 +265,14 @@ class _SoftDTW(Function):
         dev = grad_output.device
         dtype = grad_output.dtype
         D, R, gamma, bandwidth = ctx.saved_tensors
-        D_ = D.detach().cpu().numpy()
-        R_ = R.detach().cpu().numpy()
+        # D_ = D.detach().cpu().numpy()
+        # R_ = R.detach().cpu().numpy()
+        if D.dtype == torch.bfloat16 or D.dtype == torch.float16:
+            D_ = D.detach().to(torch.float32).cpu().numpy()
+            R_ = R.detach().to(torch.float32).cpu().numpy()
+        else:
+            D_ = D.detach().cpu().numpy()
+            R_ = R.detach().cpu().numpy()
         g_ = gamma.item()
         b_ = bandwidth.item()
         E = torch.Tensor(compute_softdtw_backward(D_, R_, g_, b_)).to(dev).type(dtype)
@@ -310,7 +319,7 @@ class SoftDTW(torch.nn.Module):
         use_cuda = self.use_cuda
 
         if use_cuda and (lx > 1024 or ly > 1024):  # We should be able to spawn enough threads in CUDA
-                print("SoftDTW: Cannot use CUDA because the sequence length > 1024 (the maximum block size supported by CUDA)")
+                # print("SoftDTW: Cannot use CUDA because the sequence length > 1024 (the maximum block size supported by CUDA)")
                 use_cuda = False
 
         # Finally, return the correct function

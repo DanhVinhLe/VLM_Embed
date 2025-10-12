@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 import torch
 import numpy as np
-from src.utils import print_master
+from src.utils import print_master, print_rank
 
 from src.model.vlm_backbone.llava_next import LlavaNextForConditionalGeneration
 from src.model.vlm_backbone.llava_onevision import LlavaOnevisionForConditionalGeneration
@@ -158,6 +158,7 @@ def load_processor(model_args, data_args=None):
             model_name_or_path,
             image_processor=image_processor, tokenizer=tokenizer
         )
+        print("teacher processor loaded here.")
     elif model_args.model_backbone == QWEN2_VL_TOKENSELECTION:
         from src.model.vlm_backbone.qwen2_vl_tokenselection.processing_qwen2_vl import Qwen2VLProcessor
         from src.model.vlm_backbone.qwen2_vl_tokenselection.image_processing_qwen2_vl import Qwen2VLImageProcessor
@@ -241,6 +242,7 @@ def load_processor(model_args, data_args=None):
             model_args.processor_name if model_args.processor_name else model_args.model_name,
             trust_remote_code=True,
         )
+        print("Teacher processor loaded here.")
     return processor
 
 
@@ -248,6 +250,9 @@ def get_backbone_name(hf_config, model_type=None):
     if model_type is not None:
         setattr(hf_config, 'model_type', model_type)
     assert hf_config.model_type in SUPPORTED_MODELS, f"Unknown backbone name {hf_config.model_type}.Supported models are {SUPPORTED_MODELS}"
+    print(f"Detected model type: {hf_config.model_type}")
+    model_backbone = MODEL2BACKBONE[hf_config.model_type]
+    print(f"Determined model backbone: {model_backbone}")
     return MODEL2BACKBONE[hf_config.model_type]
 
 

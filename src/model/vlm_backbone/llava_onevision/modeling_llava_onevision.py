@@ -847,6 +847,7 @@ class LlavaOnevisionForConditionalGeneration(LlavaOnevisionPreTrainedModel, Gene
             attentions=outputs.attentions,
             image_hidden_states=outputs.image_hidden_states,
             video_hidden_states=outputs.video_hidden_states,
+            batch_image_embeds=outputs.batch_image_embeds,
         )
 
     def prepare_inputs_for_generation(

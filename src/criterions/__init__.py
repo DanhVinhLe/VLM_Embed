@@ -9,6 +9,6 @@ criterion_list = {
 }
 
 def build_criterion(args):
-    if args.kd_loss_type not in criterion_list:
-        raise ValueError(f"Criterion {args.criterion} not found.")
-    return criterion_list[args.criterion](args)
+    if args.kd_loss_type not in criterion_list.keys():
+        raise ValueError(f"Criterion {args.kd_loss_type} not found.")
+    return criterion_list[args.kd_loss_type](args)

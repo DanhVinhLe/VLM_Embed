@@ -57,13 +57,18 @@ def push_to_hub(repo_name=None, token=None, commit_message="Upload model",
 
 
 def batch_to_device(batch, device):
-    _batch = {}
-    for key, value in batch.items():
-        if isinstance(value, torch.Tensor):
-            _batch[key] = value.to(device)
-        else:
-            _batch[key] = value
-    return _batch
+    if isinstance(batch, dict):
+        # Nếu là dictionary, gọi đệ quy cho từng value
+        return {k: batch_to_device(v, device) for k, v in batch.items()}
+    elif isinstance(batch, list):
+        # Nếu là list, gọi đệ quy cho từng phần tử
+        return [batch_to_device(v, device) for v in batch]
+    elif isinstance(batch, torch.Tensor):
+        # Nếu là tensor, chuyển nó lên device
+        return batch.to(device)
+    else:
+        # Giữ nguyên các kiểu dữ liệu khác (string, int, ...)
+        return batch
 
 def finetune(
     model_args: ModelArguments, 
@@ -117,15 +122,17 @@ def finetune(
     ds_config["gradient_accumulation_steps"] = training_args.gradient_accumulation_steps
     ds_config["train_micro_batch_size_per_gpu"] = training_args.per_device_train_batch_size
     ds_config["gradient_clipping"] = training_args.max_grad_norm
+    ds_config["train_batch_size"] = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps * (dist.get_world_size() if is_distributed else 1)
         
     model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
         model=distiller,
         optimizer=optimizer,
-        model_parameters=distiller.student.parameters(),
         lr_scheduler=lr_scheduler,
         mpu=None,
         config_params=ds_config,
     )
+    print(model_engine.module is distiller)  # phải là True
+    print(sum(p.numel() for p in model_engine.module.parameters()))
     
     for n, p in model_engine.named_parameters():
         if p.requires_grad:
@@ -138,8 +145,6 @@ def finetune(
 
     print_rank(f"model device: {next(model_engine.parameters()).device}")
     model_engine.train()
-    num_trainable = sum(p.numel() for p in model_engine.parameters() if p.requires_grad)
-    print_rank(f"Number of parameters in student model: {num_trainable}")
     
     if "wandb" in training_args.report_to and getattr(model_engine, "global_rank", 0) == 0:
         print("Initialized wandb")
@@ -202,11 +207,15 @@ def finetune(
                 break
             
             for batch in global_batch:
+                # print(f"Batch device before to device: {batch['student_inputs']['qry']['input_ids'].device}")
+                device_batch = batch_to_device(batch, model_engine.device)
+                # print(f"Model device: {next(model_engine.parameters()).device}")
+                # print(f"Batch device after to device: {device_batch['student_inputs']['qry']['input_ids'].device}")
                 st_time = time.time()
                 
                 # print(f"Teacher_qry_reps dtype: {teacher_qry_reps.dtype}, device: {teacher_qry_reps.device}")
-                loss_dict = model_engine(criterion, batch)
-                
+                loss_dict = model_engine(criterion, device_batch)
+
                 loss = loss_dict['loss']
                 model_engine.backward(loss)
                 
@@ -370,12 +379,12 @@ def finetune(
     return logging_output
 
 def main():
-    for arg in sys.argv:
-        if arg.startswith("--local_rank"):
-            local_rank = int(arg.split("=")[-1])
-            sys.argv.remove(arg)
-            sys.argv.append(f"--local_rank")
-            sys.argv.append(f"{local_rank}")
+    # for arg in sys.argv:
+    #     if arg.startswith("--local_rank"):
+    #         local_rank = int(arg.split("=")[-1])
+    #         sys.argv.remove(arg)
+    #         sys.argv.append(f"--local_rank")
+    #         sys.argv.append(f"{local_rank}")
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     model_args: ModelArguments
