@@ -68,7 +68,12 @@ class Distiller(nn.Module):
         self.device = device
         self.student = self._load_student()
         self.teacher = self._load_teacher()
+        self.student_hidden_dim = self.model_args.student_hidden_dim
+        self.teacher_hidden_dim = self.model_args.teacher_hidden_dim
         self.temperature = model_args.temperature
+        if self.model_args.projector_config_path is not None:
+            self.set_projector()
+            print("Projectors set.")
     
     def _create_model_args(self, model_type='teacher'):
         if model_type == 'teacher': 
@@ -88,79 +93,6 @@ class Distiller(nn.Module):
             print_rank("Not implemented student model args creation.")
             raise NotImplementedError
         return model_args
-    def add_distiller_args(parser):
-        group = parser.add_argument_group("distiller", "distiller configurations")
-        group.add_argument("--projector-config-path", type=str, default=None,
-                           help='path to projector_config.json')
-        group.add_argument("--projector-path", type=str, default=None,
-                           help='path to pretrained projector')
-        group.add_argument("--projector-lr", type=float, default=0.001,
-                           help='learning rate only for projection')
-        group.add_argument("--pretrained-projector", type=str, default=None,
-                           help='pretrained projector name')
-        group.add_argument("--pretrained-projector-lr", type=float, default=0.001,
-                           help='learning rate only for pretrained projector')
-        
-    def set_and_load_existing_projectors(self):
-        self.projectors = nn.ModuleDict()
-        projector_config = json.load(open(self.args.projector_config_path))
-        name_dict = {
-            "s": self.hidden_size, 
-            "t": self.teacher_hidden_size,
-            "relu": nn.ReLU()
-        }
-        # auto-parse projector config strings to construct nn.Module
-        for projector_name in projector_config:
-            # for d in projector_config[loc]:
-            if projector_config[projector_name]["enabled"]:
-                self.projectors[projector_name] = nn.Sequential()
-
-                structure = projector_config[projector_name]["structure"].split("-")
-                for i in range(len(structure)):
-                    if structure[i] not in ["relu"]:
-                        coef = 1 if not len(structure[i][:-1]) else int(structure[i][:-1])
-                        base_size = name_dict[structure[i][-1]]
-                        structure[i] = coef * base_size
-
-                for i in range(len(structure) - 1):
-                    if isinstance(structure[i], int) and isinstance(structure[i+1], int):
-                        self.projectors[projector_name].append(
-                            nn.Linear(structure[i], structure[i+1])
-                        )
-                    elif isinstance(structure[i], int) and isinstance(structure[i+1], str):
-                        self.projectors[projector_name].append(
-                            name_dict[structure[i+1]]
-                        )
-                        last_size = structure[i]
-                    elif isinstance(structure[i], str) and isinstance(structure[i+1], int):
-                        self.projectors[projector_name].append(
-                            nn.Linear(last_size, structure[i+1])
-                        )
-                    else:
-                        raise NotImplementedError(f"Invalid structure for '{structure}'")
-                        
-        # load existing projectors if already have
-        self.load_existing_projectors()
-
-    def load_existing_projectors(self):
-        if self.args.projector_path is not None:
-            projector_path = os.path.join(self.args.projector_path, "projector.pt")
-        else:
-            projector_path = os.path.join(self.args.model_path, "projector.pt")
-
-        if os.path.exists(projector_path):
-            projector_params = torch.load(projector_path, map_location=f"cuda:{self.device}")
-            print_rank("Existing projector params: {}".format(list(projector_params.keys())))
-            for key in self.projectors:
-                try:
-                    state_dict = {
-                        n.split('.', 1)[1]: projector_params[n] for n in projector_params if n.startswith(key)
-                    }
-                    self.projectors[key].load_state_dict(state_dict)
-                    print_rank("Load projector '{}' from current path.".format(key))
-                except:
-                    print_rank("Not compatible for projector '{}'".format(key))
-                    continue
     
     def _load_student(self):
         print("Load student with lora rank:", self.model_args.lora_r)
@@ -193,7 +125,51 @@ class Distiller(nn.Module):
     def forward(self, criterion, batch):
         loss = criterion(self, batch)
         return loss
-
+    
+    def set_projector(self):
+        self.projectors = nn.ModuleDict()
+        projector_config = json.load(open(self.model_args.projector_config_path, 'r'))
+        
+        name_dict = {
+            "s": self.student_hidden_dim,
+            "t": self.teacher_hidden_dim,
+            "relu": nn.ReLU()
+        }
+        
+        for name, cfg in projector_config.items():
+            if not cfg.get("enabled", False):
+                continue
+            seq = nn.Sequential()
+            parts = cfg["structure"].split("-")
+            parsed = []
+            
+            for p in parts:
+                if p == "relu":
+                    parsed.append("relu")
+                else:
+                    coef = int(p[:-1]) if len(p) > 1 and p[:-1].isdigit() else 1
+                    parsed.append(coef * name_dict[p[-1]])
+            for i in range(len(parsed) -1):
+                a, b = parsed[i], parsed[i+1]
+                if isinstance(a, int) and isinstance(b, int):
+                    seq.append(nn.Linear(a, b))
+                elif b == "relu":
+                    seq.append(name_dict[b])
+                elif a =="relu" and isinstance(b, int):
+                    prev_out = parsed[i-1] if isinstance(parsed[i-1], int) else None
+                    seq.append(nn.Linear(prev_out, b))
+            self.projectors[name] = seq
+            print(f"Projector {name} created with structure: {seq}")
+    
+    def add_optimizer_param_group(self, optimizer):
+        if hasattr(self, 'projectors'):
+            lr = getattr(self.training_args, "projector_lr", None) or self.training_args.learning_rate
+            optimizer.add_param_group({
+                "params": [p for proj in self.projectors.values() for p in proj.parameters()],
+                "lr": lr
+            })
+        print("Projector parameters added to optimizer.")
+        return optimizer
 class DistillationCollator:
     def __init__(self, student_processor: ProcessorMixin, teacher_processor: ProcessorMixin,
                  model_args: ModelArguments, data_args: DataArguments, training_args: TrainingArguments,

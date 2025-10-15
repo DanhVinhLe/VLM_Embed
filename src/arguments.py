@@ -38,6 +38,12 @@ class ModelArguments:
     teacher_lora_target_modules: str = field(default="qkv_proj,o_proj,gate_up_proj,down_proj,k_proj,q_proj,out_proj,v_proj", metadata={"help": "teacher lora target modules"})
     teacher_pooling: str = field(default='last', metadata={"help": "pooling method for teacher encoder"})
     teacher_normalize: bool = field(default=False, metadata={"help": "normalize query and passage representations for teacher"})
+    projector_config_path: str = field(default=None, metadata={"help": "projector config path, if None, no projector will be used"})
+    projector_path: str = field(default=None, metadata={"help": "projector model path, if None, no projector will be used"})
+    projector_lr: float = field(default=1e-4, metadata={"help": "projector learning rate"})
+    student_hidden_dim: int = field(default=896, metadata={"help": "student hidden dim"})
+    teacher_hidden_dim: int = field(default=1536, metadata={"help": "teacher hidden dim"})
+    #! new args 2
 
 @dataclass
 class DataArguments:

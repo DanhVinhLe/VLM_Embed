@@ -1,11 +1,13 @@
 from .contrastive_loss_with_RKD import ContrastiveLossWithRKD
 from .proposal_loss_with_DTW import ProposalLossWithDTW
 from .universal_logit_distillation import UniversalLogitDistillation
+from .propose_with_proj import ProposalLossWithProj
 
 criterion_list = {
     "contrastive_rkd": ContrastiveLossWithRKD,
     "proposal_dtw": ProposalLossWithDTW,
     "universal_logit": UniversalLogitDistillation,
+    "proposal_proj": ProposalLossWithProj,
 }
 
 def build_criterion(args):
