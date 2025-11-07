@@ -9,7 +9,6 @@ import logging
 logging.getLogger("numba").setLevel(logging.ERROR)
 
 import wandb
-wandb.login(key="f5a118efa8813fb4edc7f6b8a7ab5c9c5f9e1ece")
 
 class ProposalLossWithDTW(nn.Module):
     def __init__(self, args):
@@ -102,22 +101,20 @@ class ProposalLossWithDTW(nn.Module):
                     self.kd_loss_dtw_image = self.kd_loss_dtw_image + self.dtw_criterion(s_pos_image_features.unsqueeze(0), projected_t_pos_image_features.unsqueeze(0)).mean()
         self.kd_loss_dtw_image = self.kd_loss_dtw_image / batch_size
 
-        self.kd_loss_dtw = self.kd_loss_mse_seq + self.kd_loss_dtw_image
-        self.kd_loss_dtw = self.kd_loss_dtw_image
+        self.kd_loss_dtw = self.kd_loss_mse_seq + 0.1 * self.kd_loss_dtw_image
 
         # OT loss
         topk_token_text_results = self.extract_top_k_text_token(input_data, teacher_qry_attention, teacher_pos_attention, num_text_qry_tokens, num_text_pos_tokens)
         self.ot_loss = self.compute_ot_loss(student_qry_output, student_pos_output, teacher_qry_output, teacher_pos_output, distiller, input_data, topk_token_text_results)
-        total_loss = contrastive_loss + self.kd_loss_weight * (self.kd_loss_rkd + 0.05 * self.kd_loss_dtw + 0.5 * self.ot_loss)
+        total_loss = contrastive_loss + self.kd_loss_weight * (self.kd_loss_rkd + self.kd_loss_mse_seq + 0.1 * self.kd_loss_dtw_image + 0.5 * self.ot_loss)
         # total_loss = contrastive_loss + self.kd_loss_weight *(0.1 * self.attn_loss)
         return {
             "loss": total_loss, 
             "contrastive_loss": contrastive_loss,
-            "kd_loss": self.kd_loss_rkd + 0.3 * self.kd_loss_dtw + 0.5 * self.ot_loss,
+            "kd_loss": self.kd_loss_rkd + self.kd_loss_mse_seq + 0.1 * self.kd_loss_dtw_image + 0.5 * self.ot_loss,
             "kd_loss_rkd": self.kd_loss_rkd,
             "kd_loss_dtw": self.kd_loss_dtw,
             "ot_loss": self.ot_loss,
-            # "kd_loss": 0.1 * self.attn_loss,
         }
 
     def extract_top_k_text_token(self, input_data, teacher_qry_attention, teacher_pos_attention, num_text_qry_tokens, num_text_pos_tokens):

@@ -4,6 +4,7 @@ from typing import Dict, Tuple, Optional
 import time
 import json
 import pickle
+import math
 from datasets import load_dataset, concatenate_datasets
 import torch
 import torch.nn as nn
@@ -59,7 +60,7 @@ def process_image(image, resolution, max_dim=1344):
     elif resolution == "mid":
         target_max = 672
     elif resolution == "low":
-        target_max = 384
+        target_max = 448
     else:
         target_max = max_dim
 
@@ -282,6 +283,9 @@ class DistillationDataset(Dataset):
                 subset,
                 split=f"{self.data_args.dataset_split}"
             )
+            total_samples = len(subset_data)
+            num_samples_to_keep = math.ceil(total_samples * 0.3)
+            subset_data = subset_data.select(range(num_samples_to_keep))
             subset_data = subset_data.add_column("pos_text_instruction", [POS_MOD_DICT.get(subset, "") + text for text in subset_data['pos_text']])
             subset_data = subset_data.remove_columns(set(['neg_text', 'neg_image_path']) & set(subset_data.column_names))
             subset_data = subset_data.remove_columns(set(subset_data.column_names) - set(['qry', 'qry_image_path', 'pos_image_path', 'pos_text_instruction']))

@@ -1,11 +1,11 @@
-# torch
+torch==2.7.1
 numpy==1.26.4
-# torchvision
+torchvision==0.22.1
 transformers==4.56.1
 huggingface-hub
-peft
-accelerate
-datasets
+peft==0.17.1
+accelerate==1.10.1
+datasets==4.1.1
 scipy
 tqdm
 wandb
@@ -24,3 +24,4 @@ decord
 hnswlib
 einops
 deepspeed==0.17.6
+numba

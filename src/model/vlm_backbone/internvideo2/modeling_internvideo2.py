@@ -22,9 +22,11 @@ try:
     from flash_attn.ops.rms_norm import DropoutAddRMSNorm
 except:
     print(f'DropoutAddRMSNorm of flash_attn is not installed!!!')
-
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
-from flash_attn.bert_padding import unpad_input, pad_input
+try: 
+    from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+    from flash_attn.bert_padding import unpad_input, pad_input
+except:
+    print(f'flash_attn_interface or bert_padding of flash_attn is not installed!!!')
 
 
 class FlashAttention(nn.Module):

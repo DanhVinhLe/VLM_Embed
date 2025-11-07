@@ -24,6 +24,8 @@ from huggingface_hub import HfApi, HfFolder, Repository, create_repo
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, HfArgumentParser
 from transformers.integrations import HfDeepSpeedConfig
 # Todo
+wandb.login(key="f5a118efa8813fb4edc7f6b8a7ab5c9c5f9e1ece")
+
 def get_optimizer_params(model, training_args):
     param_optimizer = list(model.named_parameters())
     optimizer_grouped_parameters = [
@@ -48,33 +50,6 @@ def get_optimizer(model, training_args):
 def prepare_dataset(data_args, model_args):
     dataset = DistillationDataset(data_args, model_args)
     return dataset
-
-def push_to_hub(repo_name=None, token=None, commit_message="Upload model", 
-                local_dir="./temp_model", private=False):
-    try:
-        if not repo_name:
-            raise ValueError("must specify a repo name to push to hub")
-        
-        if not os.path.exists(local_dir):
-            raise ValueError(f"local_dir {local_dir} does not exist")
-        
-        print_rank(f"Pushing model to the hub at {repo_name}...")
-        api = HfApi()
-        create_repo(repo_name, token=token, private=private, exist_ok=True)
-        api.upload_folder(
-            folder_path=local_dir,
-            repo_id=repo_name, 
-            token=token, 
-            commit_message=commit_message
-        )
-
-        print_rank(f"Model has been pushed to the hub at: {repo_name}")
-        return True
-        
-    except Exception as e:
-        print_rank(f"Error pushing to hub: {str(e)}")
-        return False
-
 
 def batch_to_device(batch, device):
     _batch = {}
@@ -120,17 +95,18 @@ def finetune(
             # print(f"Cast {n} to bf16")
 
     # cast_lora_to_bf16(distiller.student)
-        
-    print(next(distiller.student.parameters()).device)
+    num_trainable_params = sum(p.numel() for p in distiller.student.parameters() if p.requires_grad)
+    num_total_params = sum(p.numel() for p in distiller.student.parameters())
+    num_trainable_params_teacher = sum(p.numel() for p in distiller.teacher.parameters() if p.requires_grad)
+    num_total_params_teacher = sum(p.numel() for p in distiller.teacher.parameters())
+    print_rank(f"Number of trainable parameters: {num_trainable_params} / {num_total_params}")
+    print_rank(f"Number of trainable parameters (teacher): {num_trainable_params_teacher} / {num_total_params_teacher}")
     distiller.student.train()
-    print(f"Number of parameters in student model: {sum(p.numel() for p in distiller.student.parameters() if p.requires_grad)}")
-    print(f"Number of parameters in teacher model: {sum(p.numel() for p in distiller.teacher.parameters() if p.requires_grad)}")
-    print(f"Number of parameters in projectors: {sum(p.numel() for proj in getattr(distiller, 'projectors', {}).values() for p in proj.parameters() if p.requires_grad)}")
     
     if "wandb" in training_args.report_to and accelerator.is_main_process:
         print("Initialized wandb")
         wandb.init(
-            project="vlm_distillation_propose_kd_weight", 
+            project=training_args.output_dir.split("/")[-1], 
             name=model_args.model_backbone, 
             config={
                 "learning_rate": training_args.learning_rate,
@@ -283,34 +259,14 @@ def finetune(
                 if hasattr(unwarpped_student, 'peft_config'):
                     unwarpped_student.peft_config.save_pretrained(ckpt_dir)
                     unwarpped_student.save_pretrained(ckpt_dir)
-                    # save_file(
-                    #     unwarpped_student.state_dict(),
-                    #     os.path.join(ckpt_dir, "adapter_model.safetensors")
-                    # )
                     print_rank("Saved LoRA adapter model.")
                 else:
-                    # save_file(
-                    #     unwarpped_student.state_dict(),
-                    #     os.path.join(ckpt_dir, "model.safetensors")
-                    # )
                     unwarpped_student.encoder.save_pretrained(ckpt_dir)
                     print_rank("Saved full student model.")
-                # training_args_dict = {
-                #     "num_train_epochs": training_args.num_train_epochs,
-                #     "learning_rate": training_args.learning_rate,
-                #     "per_device_train_batch_size": data_args.per_device_train_batch_size,
-                #     "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-                #     "temperature": model_args.temperature,
-                #     "pooling": model_args.pooling,
-                # }
-                # with open(os.path.join(ckpt_dir, "training_args.json"), "w") as f:
-                #     json.dump(training_args_dict, f, indent=2)
                 
                 accelerator.save_state(ckpt_dir)
                 print_rank(f"Checkpoint saved at {ckpt_dir}")
                 
-                # if training_args.push_to_hub and training_args.hub_model_id:
-                #     hub_repo_name = f"{training_args.hub_model_id}-epoch{epoch + 1}"
                 student_config = AutoConfig.from_pretrained(model_args.model_name) if model_args.model_name else None
                 tokenizer = AutoTokenizer.from_pretrained(model_args.model_name) if model_args.model_name else None
 
@@ -329,10 +285,7 @@ def finetune(
     if accelerator.is_main_process and training_args.save_strategy == "epoch":
         final_ckpt_dir = os.path.join(training_args.output_dir, f"checkpoint-final")
         os.makedirs(final_ckpt_dir, exist_ok=True)
-        # save_file(
-        #     accelerator.unwrap_model(distiller.student).state_dict(),
-        #     os.path.join(final_ckpt_dir, "student_model.safetensors")
-        # )
+
         unwarpped_student = accelerator.unwrap_model(distiller.student)
         unwarpped_student.encoder.save_pretrained(final_ckpt_dir)
         if hasattr(unwarpped_student, 'peft_config'):
@@ -344,7 +297,6 @@ def finetune(
         print_rank(f"Final model saved at {final_ckpt_dir}")
         
         # Push final model to hub
-        # if training_args.push_to_hub and training_args.hub_model_id:
         if model_args.model_name:
             student_config = AutoConfig.from_pretrained(model_args.model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_args.model_name)
@@ -375,12 +327,7 @@ def main():
     training_args: TrainingArguments
     
     train_dataset = prepare_dataset(data_args, model_args)
-    print_rank(f"Number of training samples: {len(train_dataset)}")
     distiller = Distiller(model_args, training_args, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    print(f"Number of parameters in student model: {sum(p.numel() for p in distiller.student.parameters())}")
-    print(f"Number of parameters in teacher model: {sum(p.numel() for p in distiller.teacher.parameters())}")
-    print(f"Number of trainable parameters in student model: {sum(p.numel() for p in distiller.student.parameters() if p.requires_grad)}")
-    print(f"Number of trainable parameters in teacher model: {sum(p.numel() for p in distiller.teacher.parameters() if p.requires_grad)}")
     collator = DistillationCollator(
         student_processor=distiller.get_student_processor(),
         teacher_processor=distiller.get_teacher_processor(),
