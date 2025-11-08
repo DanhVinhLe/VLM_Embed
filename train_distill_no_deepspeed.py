@@ -18,13 +18,11 @@ from torch.utils.data import DataLoader, RandomSampler, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 
-import wandb 
 from accelerate import Accelerator
 from huggingface_hub import HfApi, HfFolder, Repository, create_repo
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, HfArgumentParser
 from transformers.integrations import HfDeepSpeedConfig
 # Todo
-wandb.login(key="f5a118efa8813fb4edc7f6b8a7ab5c9c5f9e1ece")
 
 def get_optimizer_params(model, training_args):
     param_optimizer = list(model.named_parameters())
@@ -114,18 +112,6 @@ def finetune(
     print_rank(f"Number of trainable parameters (teacher): {num_trainable_params_teacher} / {num_total_params_teacher}")
     distiller.student.train()
     
-    if "wandb" in training_args.report_to and accelerator.is_main_process:
-        print("Initialized wandb")
-        wandb.init(
-            project=training_args.output_dir.split("/")[-1], 
-            name=model_args.model_backbone, 
-            config={
-                "learning_rate": training_args.learning_rate,
-                "batch_size": training_args.per_device_train_batch_size,
-                "epochs": training_args.num_train_epochs,
-                "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-            }
-        )
     
     step = 0
     logging_output = {
@@ -228,21 +214,8 @@ def finetune(
                     "ot_loss": f"{batch_ot_loss:.4f}",
                 })
                 progress_bar.update(1)
-                if "wandb" in training_args.report_to:
-                    wandb.log({
-                        "train/loss": batch_loss,
-                        "train/contrastive_loss": batch_contrastive_loss,
-                        "train/kd_loss": batch_kd_loss,
-                        "train/kd_loss_rkd": batch_kd_rkd_loss,
-                        "train/kd_loss_dtw": batch_kd_dtw_loss,
-                        "train/ot_loss": batch_ot_loss,
-                        "train/lr": optimizer.param_groups[0]['lr'],
-                        "train/epoch": epoch + 1,
-                        "train/global_step": step,
-                    })
                     
-                    logging_output['micro_step_time'] = []
-                    logging_output['step_time'] = []
+                    
         # End of epoch
         if accelerator.is_main_process:
             avg_epoch_loss = epoch_loss / max(1, epoch_step)
@@ -254,13 +227,6 @@ def finetune(
                 f"Avg Contrastive Loss: {avg_contrastive_loss:.4f} | Avg KD Loss: {avg_kd_loss:.4f} | "
             )
             
-            if "wandb" in training_args.report_to:
-                wandb.log({
-                    "epoch/avg_loss": avg_epoch_loss,
-                    "epoch/avg_contrastive_loss": avg_contrastive_loss,
-                    "epoch/avg_kd_loss": avg_kd_loss,
-                    "epoch/epoch": epoch + 1,
-                })
             # Save checkpoint
             if training_args.save_strategy == "epoch":
                 ckpt_dir = os.path.join(training_args.output_dir, f"checkpoint-epoch{epoch + 1}")
@@ -319,8 +285,6 @@ def finetune(
             student_config.save_pretrained(final_ckpt_dir)
             tokenizer.save_pretrained(final_ckpt_dir)
 
-        if "wandb" in training_args.report_to:
-            wandb.finish()
 
     return logging_output
 

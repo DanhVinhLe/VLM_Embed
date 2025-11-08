@@ -19,13 +19,11 @@ from torch.utils.data import DataLoader, RandomSampler, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 
-import wandb 
 from accelerate import Accelerator
 from huggingface_hub import HfApi, HfFolder, Repository, create_repo
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, HfArgumentParser
 from transformers.integrations import HfDeepSpeedConfig
 # Todo
-wandb.login(key="f5a118efa8813fb4edc7f6b8a7ab5c9c5f9e1ece")
 
 def get_optimizer_params(model, training_args):
     param_optimizer = list(model.named_parameters())
@@ -157,30 +155,11 @@ class Trainer:
                     'kd_dtw_loss': f"{batch_kd_dtw_loss:.4f}",
                 })
                 progress_bar.update(1)
-                if "wandb" in self.training_args.report_to:
-                    wandb.log({
-                        'train/loss': batch_loss,
-                        'train/kd_loss': batch_kd_loss,
-                        'train/contrastive_loss': batch_contrastive_loss,
-                        'train/kd_rkd_loss': batch_kd_rkd_loss,
-                        'train/ot_loss': batch_ot_loss,
-                        'train/kd_dtw_loss': batch_kd_dtw_loss,
-                    }, step=epoch * (len(self.train_data.dataset) // self.training_args.per_device_train_batch_size // dist.get_world_size()) + batch_idx // self.training_args.gradient_accumulation_steps)
+                
             torch.cuda.empty_cache()
         progress_bar.close()
         
     def train(self):
-        if "wandb" in self.training_args.report_to and self.gpu_id == 0:
-            wandb.init(
-                project=self.training_args.output_dir.split("/")[-1],
-                name=self.model_args.model_backbone + "_distillation",
-                config={
-                    "learning_rate": self.training_args.learning_rate,
-                    "batch_size": self.training_args.per_device_train_batch_size,
-                    "epochs": self.training_args.num_train_epochs,
-                    "gradient_accumulation_steps": self.training_args.gradient_accumulation_steps,
-                }
-            )
         for epoch in range(self.training_args.num_train_epochs):
             self.run_epoch(epoch)
             if self.gpu_id == 0 and self.training_args.save_strategy == "epoch":

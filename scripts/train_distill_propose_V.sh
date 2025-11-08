@@ -39,7 +39,6 @@ torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --teacher_normalize True \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
-    --report_to "wandb" \
     --kd_weight 0.3 \
     --kd_loss_type "proposal_dtw" \
     --image_resolution "low" \

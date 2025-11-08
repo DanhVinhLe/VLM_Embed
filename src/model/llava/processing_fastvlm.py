@@ -23,6 +23,7 @@ from src.model.llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DE
 logger = logging.get_logger(__name__)
 
 def expand2square(pil_img, background_color):
+    pil_img = pil_img.convert("RGB")
     width, height = pil_img.size
     if width == height:
         return pil_img
