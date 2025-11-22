@@ -19,7 +19,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 
 import deepspeed
-import wandb 
+# import wandb 
 from accelerate import Accelerator
 from huggingface_hub import HfApi, HfFolder, Repository, create_repo
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, HfArgumentParser
@@ -188,18 +188,18 @@ def finetune(
     print_rank(f"model device: {next(model_engine.parameters()).device}")
     model_engine.train()
 
-    if "wandb" in training_args.report_to and dist.get_rank() == 0:
-        print("Initialized wandb")
-        wandb.init(
-            project="vlm_distillation_projector", 
-            name=model_args.model_backbone if model_args.model_backbone else "distillation_experiment", 
-            config={
-                "learning_rate": training_args.learning_rate,
-                "batch_size": training_args.per_device_train_batch_size,
-                "epochs": training_args.num_train_epochs,
-                "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-            }
-        )
+    # if "wandb" in training_args.report_to and dist.get_rank() == 0:
+    #     print("Initialized wandb")
+    #     wandb.init(
+    #         project="vlm_distillation_projector", 
+    #         name=model_args.model_backbone if model_args.model_backbone else "distillation_experiment", 
+    #         config={
+    #             "learning_rate": training_args.learning_rate,
+    #             "batch_size": training_args.per_device_train_batch_size,
+    #             "epochs": training_args.num_train_epochs,
+    #             "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+    #         }
+    #     )
     
     step = 0
     logging_output = {
@@ -302,18 +302,18 @@ def finetune(
                 })
                 progress_bar.update(1)
                 
-                if "wandb" in training_args.report_to:
-                    wandb.log({
-                        "train/loss": batch_loss,
-                        "train/contrastive_loss": batch_contrastive_loss,
-                        "train/kd_loss": batch_kd_loss,
-                        "train/kd_rkd_loss": batch_kd_rkd_loss,
-                        "train/ot_loss": batch_ot_loss,
-                        "train/kd_dtw_loss": batch_kd_dtw_loss,
-                        "train/lr": current_lr,
-                        "train/epoch": epoch + 1,
-                        "train/global_step": step,
-                    })
+                # if "wandb" in training_args.report_to:
+                #     wandb.log({
+                #         "train/loss": batch_loss,
+                #         "train/contrastive_loss": batch_contrastive_loss,
+                #         "train/kd_loss": batch_kd_loss,
+                #         "train/kd_rkd_loss": batch_kd_rkd_loss,
+                #         "train/ot_loss": batch_ot_loss,
+                #         "train/kd_dtw_loss": batch_kd_dtw_loss,
+                #         "train/lr": current_lr,
+                #         "train/epoch": epoch + 1,
+                #         "train/global_step": step,
+                #     })
                     
                 #     logging_output['micro_step_time'] = []
                 #     logging_output['step_time'] = []
@@ -332,13 +332,13 @@ def finetune(
                 f"Avg Contrastive Loss: {avg_contrastive_loss:.4f} | Avg KD Loss: {avg_kd_loss:.4f} | "
             )
             
-            if "wandb" in training_args.report_to:
-                wandb.log({
-                    "epoch/avg_loss": avg_epoch_loss,
-                    "epoch/avg_contrastive_loss": avg_contrastive_loss,
-                    "epoch/avg_kd_loss": avg_kd_loss,
-                    "epoch/epoch": epoch + 1,
-                })
+            # if "wandb" in training_args.report_to:
+            #     wandb.log({
+            #         "epoch/avg_loss": avg_epoch_loss,
+            #         "epoch/avg_contrastive_loss": avg_contrastive_loss,
+            #         "epoch/avg_kd_loss": avg_kd_loss,
+            #         "epoch/epoch": epoch + 1,
+            #     })
             # Save checkpoint
             if training_args.save_strategy == "epoch":
                 ckpt_dir = os.path.join(training_args.output_dir, f"checkpoint-epoch{epoch + 1}")
@@ -392,11 +392,11 @@ def finetune(
                     processor.save_pretrained(final_ckpt_dir)
             except Exception as e:
                 print_rank(f"Warning saving final processor: {e}")
-        if "wandb" in training_args.report_to:
-            try:
-                wandb.finish()
-            except Exception as e:
-                print_rank(f"Warning: cannot finalize wandb run: {e}")
+        # if "wandb" in training_args.report_to:
+        #     try:
+        #         wandb.finish()
+        #     except Exception as e:
+        #         print_rank(f"Warning: cannot finalize wandb run: {e}")
         
         dist.barrier()
 
