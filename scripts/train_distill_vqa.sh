@@ -28,7 +28,7 @@ deepspeed --num_gpus=$NUM_GPUS $TRAIN_SCRIPT \
     --subset_name "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
-    --percent_data 0.5 \
+    --percent_data 0.8 \
     --output_dir "training/deepspeed_projector_vqa" \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 1 \

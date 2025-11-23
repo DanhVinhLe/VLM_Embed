@@ -28,7 +28,7 @@ deepspeed --num_gpus=$NUM_GPUS $TRAIN_SCRIPT \
     --subset_name "VisDial" "CIRR" "VisualNews_i2t" "VisualNews_t2i" "MSCOCO_i2t" "MSCOCO_t2i" "NIGHTS" "WebQA" \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
-    --percent_data 0.5 \
+    --percent_data 0.8 \
     --output_dir "training/deepspeed_projector_ret" \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 1 \
