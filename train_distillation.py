@@ -9,6 +9,7 @@ import os
 import sys
 from tqdm import tqdm 
 import math
+from datetime import timedelta
 
 import torch
 import torch.nn as nn 
@@ -43,7 +44,7 @@ def get_optimizer_params(model, training_args):
     for name, param in target_model.named_parameters():
         if param.requires_grad:
             trainable_params.append(param)
-            print_master(f"Added to optimizer: {name} ({param.numel()} params)")
+            # print_master(f"Added to optimizer: {name} ({param.numel()} params)")
     
     print_master(f"Total trainable params: {sum(p.numel() for p in trainable_params)}")
     
@@ -126,25 +127,21 @@ def finetune(
     start_time = time.time()
     
     is_distributed = dist.is_initialized()
-    if is_distributed:
-        sampler = DistributedSampler(train_dataset, shuffle=True)
-        train_dataloader = DataLoader(
-            train_dataset, 
-            batch_size=training_args.per_device_train_batch_size,
-            collate_fn=collator,
-            sampler=sampler, 
-            drop_last=True,
-            pin_memory=True,
-        )   
-    else:
-        train_dataloader = DataLoader(
-            train_dataset, 
-            batch_size=training_args.per_device_train_batch_size,
-            collate_fn=collator,
-            shuffle=True, 
-            drop_last=True,
-            pin_memory=True,
-        )
+    dp_world_size = dist.get_world_size() if is_distributed else 1
+    dp_rank = dist.get_rank() if is_distributed else 0
+    
+    sampler = DistributedSampler(train_dataset, 
+                                 shuffle=True,
+                                 drop_last=True,
+                                 rank=dp_rank,
+                                 num_replicas=dp_world_size
+                                 )
+    train_dataloader = DataLoader(
+        train_dataset, 
+        batch_size=training_args.per_device_train_batch_size,
+        collate_fn=collator,
+        sampler=sampler, 
+    )   
     
     ds_config = {}
     ds_config_path = getattr(training_args, "deepspeed_config", None)
@@ -343,8 +340,8 @@ def finetune(
             if training_args.save_strategy == "epoch":
                 ckpt_dir = os.path.join(training_args.output_dir, f"checkpoint-epoch{epoch + 1}")
                 os.makedirs(ckpt_dir, exist_ok=True)
-                # with GatheredParameters(model_engine.module.student.parameters(), modifier_rank=0):
-                model_engine.module.student.encoder.save_pretrained(ckpt_dir)
+                with GatheredParameters(model_engine.module.student.parameters(), modifier_rank=0):
+                    model_engine.module.student.encoder.save_pretrained(ckpt_dir)
                     
                 try:
                     student_config = AutoConfig.from_pretrained(model_args.model_name) if model_args.model_name else None
@@ -361,7 +358,7 @@ def finetune(
                         processor.save_pretrained(ckpt_dir)
                 except Exception as e:
                     print_rank(f"Warning saving processor: {e}")
-            dist.barrier()
+        dist.barrier()
 
         print_rank(f"Epoch {epoch + 1} finished.")
     total_time = time.time() - start_time
@@ -371,8 +368,8 @@ def finetune(
     if dist.get_rank() == 0 and training_args.save_strategy == "epoch":
         final_ckpt_dir = os.path.join(training_args.output_dir, f"checkpoint-final")
         os.makedirs(final_ckpt_dir, exist_ok=True)
-        # with GatheredParameters(model_engine.module.student.parameters(), modifier_rank=0):
-        model_engine.module.student.encoder.save_pretrained(final_ckpt_dir)
+        with GatheredParameters(model_engine.module.student.parameters(), modifier_rank=0):
+            model_engine.module.student.encoder.save_pretrained(final_ckpt_dir)
 
         print_rank(f"Final model saved at {final_ckpt_dir}")
         
@@ -398,7 +395,7 @@ def finetune(
         #     except Exception as e:
         #         print_rank(f"Warning: cannot finalize wandb run: {e}")
         
-        dist.barrier()
+    dist.barrier()
 
     return logging_output
 
@@ -417,6 +414,7 @@ def main():
     
     torch.backends.cudnn.enabled = False
     device =  torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+    deepspeed.init_distributed(timeout=timedelta(minutes=1))
     
     train_dataset = prepare_dataset(data_args, model_args)
     print_rank(f"Number of training samples: {len(train_dataset)}")

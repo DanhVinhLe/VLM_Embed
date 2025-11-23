@@ -25,7 +25,7 @@ deepspeed --num_gpus=$NUM_GPUS $TRAIN_SCRIPT \
     --model_backbone "llava_qwen2" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
-    --subset_name "OK-VQA" "A-OKVQA" "DocVQA" "InfographicVQA" "ChartQA" "Visual7W" \
+    --subset_name "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
     --percent_data 0.5 \

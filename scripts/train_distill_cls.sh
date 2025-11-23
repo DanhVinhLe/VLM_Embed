@@ -28,7 +28,7 @@ deepspeed --num_gpus=$NUM_GPUS $TRAIN_SCRIPT \
     --subset_name "VOC2007" "ImageNet_1K" "N24News" "SUN397" "HatefulMemes" \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
-    --percent_data 0.5 \
+    --percent_data 0.7 \
     --output_dir "training/deepspeed_projector_cls" \
     --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 1 \
