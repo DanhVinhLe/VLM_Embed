@@ -440,6 +440,19 @@ class MMEBModel(nn.Module):
                     torch.load(projector_path)
                 )
                 print("Successfully loading the projector's weight")
+            else:
+                try:
+                    from huggingface_hub import hf_hub_download
+                    projector_path = hf_hub_download(
+                        repo_id=model_name_or_path,
+                        filename="mm_projector.pth",
+                    )
+                    lora_model.base_model.model.model.mm_projector.load_state_dict(
+                        torch.load(projector_path)
+                    )
+                    print("Successfully loading the projector's weight from hf hub")
+                except:
+                    print("No projector weight found.")
                 
             # lora_model = lora_model.merge_and_unload()
 
