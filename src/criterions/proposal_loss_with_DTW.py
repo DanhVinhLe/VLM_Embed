@@ -113,7 +113,7 @@ class ProposalLossWithDTW(nn.Module):
                         cur_idx_pos_img += 1
         self.kd_loss_dtw_image = self.kd_loss_dtw_image / batch_size
 
-        self.kd_loss_dtw = self.kd_loss_mse_seq + 0.5 * self.kd_loss_dtw_image
+        self.kd_loss_dtw = 0.5 * self.kd_loss_dtw_image
 
         # OT loss
         # topk_token_text_results = self.extract_top_k_text_token(input_data, teacher_qry_attention, teacher_pos_attention, num_text_qry_tokens, num_text_pos_tokens)
@@ -164,11 +164,10 @@ class ProposalLossWithDTW(nn.Module):
             
             # Loại bỏ token cuối cùng khỏi việc tính toán (vì sẽ luôn được thêm vào)
             qry_imp_without_last = qry_imp_masked.clone()
-            qry_imp_without_last[-1] = 0
             pos_imp_without_last = pos_imp_masked.clone()
+            qry_imp_without_last[-1] = 0
             pos_imp_without_last[-1] = 0
             
-            # Tính tổng attention (không bao gồm token cuối)
             qry_total = qry_imp_without_last.sum()
             pos_total = pos_imp_without_last.sum()
             
@@ -186,18 +185,30 @@ class ProposalLossWithDTW(nn.Module):
             pos_num_tokens = (pos_cumsum < pos_target).sum() + 1
             pos_selected_idx = pos_sorted_idx[:pos_num_tokens]
             
-            qry_imp[-1] = 1.0
-            pos_imp[-1] = 1.0
+            
+            qry_valid_idx = qry_selected_idx[qry_mask[qry_selected_idx]]
+            pos_valid_idx = pos_selected_idx[pos_mask[pos_selected_idx]]
             
             # Thêm token cuối vào kết quả
-            qry_selected_idx = torch.cat([qry_selected_idx, torch.tensor([qry_len - 1], device=qry_selected_idx.device)])
-            pos_selected_idx = torch.cat([pos_selected_idx, torch.tensor([pos_len - 1], device=pos_selected_idx.device)])
+            qry_final_idx = torch.cat([qry_valid_idx, torch.tensor([qry_len - 1], device=qry_valid_idx.device)])
+            pos_final_idx = torch.cat([pos_valid_idx, torch.tensor([pos_len - 1], device=pos_valid_idx.device)])
+            
+            qry_selected_imp = qry_imp_masked[qry_final_idx]
+            pos_selected_imp = pos_imp_masked[pos_final_idx]
+            
+            qry_imp_sum = qry_selected_imp.sum()
+            pos_imp_sum = pos_selected_imp.sum()
+            
+            # Normalize importance
+            qry_imp_normalized = qry_selected_imp / qry_imp_sum if qry_imp_sum > 0 else qry_selected_imp
+            pos_imp_normalized = pos_selected_imp / pos_imp_sum if pos_imp_sum > 0 else pos_selected_imp
+            
             
             # Tạo kết quả với mask để loại bỏ các token không hợp lệ
-            qry_topk = [(int(idx), int(qry_ids[idx]), float(qry_imp[idx])) 
-                        for idx in qry_selected_idx if qry_mask[idx] or idx == qry_len - 1]
-            pos_topk = [(int(idx), int(pos_ids[idx]), float(pos_imp[idx])) 
-                        for idx in pos_selected_idx if pos_mask[idx] or idx == pos_len - 1]
+            qry_topk = [(int(idx), int(qry_ids[idx]), float(imp)) 
+                        for idx, imp in zip(qry_final_idx, qry_imp_normalized)]
+            pos_topk = [(int(idx), int(pos_ids[idx]), float(imp)) 
+                        for idx, imp in zip(pos_final_idx, pos_imp_normalized)]
             
             results.append({
                 "qry_topk": qry_topk,
@@ -274,6 +285,9 @@ class ProposalLossWithDTW(nn.Module):
         for i in range(batch_size):
             qry_topk_idx = [idx for idx, _, _ in topk_results[i]['qry_topk']]
             pos_topk_idx = [idx for idx, _, _ in topk_results[i]['pos_topk']]
+            
+            qry_topk_importance = [imp for _, _, imp in topk_results[i]['qry_topk']]
+            pos_topk_importance = [imp for _, _, imp in topk_results[i]['pos_topk']]
 
             if len(qry_topk_idx) == 0 or len(pos_topk_idx) == 0:
                 print("Warning: No top-k tokens found for OT loss computation for instance ", i)
@@ -283,14 +297,14 @@ class ProposalLossWithDTW(nn.Module):
             s_pos_topk_idx = [idx for idx in student_idx[i]['pos'] if idx < student_pos_hidden_states[-1][i].size(0)]
 
 
-            teacher_qry_attention_matrix = teacher_qry_attention[-1][i]
-            teacher_pos_attention_matrix = teacher_pos_attention[-1][i]
+            # teacher_qry_attention_matrix = teacher_qry_attention[-1][i]
+            # teacher_pos_attention_matrix = teacher_pos_attention[-1][i]
             
-            teacher_qry_topk_attn = teacher_qry_attention_matrix[:, -1, qry_topk_idx]
-            teacher_pos_topk_attn = teacher_pos_attention_matrix[:, -1, pos_topk_idx]
+            # teacher_qry_topk_attn = teacher_qry_attention_matrix[:, -1, qry_topk_idx]
+            # teacher_pos_topk_attn = teacher_pos_attention_matrix[:, -1, pos_topk_idx]
 
-            teacher_qry_topk_importance = torch.softmax(teacher_qry_topk_attn.mean(dim=0), dim=0)
-            teacher_pos_topk_importance = torch.softmax(teacher_pos_topk_attn.mean(dim=0), dim=0)
+            teacher_qry_topk_importance = torch.tensor(qry_topk_importance, device=device)
+            teacher_pos_topk_importance = torch.tensor(pos_topk_importance, device=device)
             
             attn_mask_stu_qry = input_data['student_inputs']['qry']['attention_mask'][i]
             attn_mask_stu_pos = input_data['student_inputs']['pos']['attention_mask'][i]
@@ -307,8 +321,13 @@ class ProposalLossWithDTW(nn.Module):
             student_qry_topk_attn = student_qry_attention_matrix[:, -(num_student_qry_pad_token + 1), s_qry_topk_idx]
             student_pos_topk_attn = student_pos_attention_matrix[:, -(num_student_pos_pad_token + 1), s_pos_topk_idx]
 
-            student_qry_topk_importance = torch.softmax(student_qry_topk_attn.mean(dim=0), dim=0)
-            student_pos_topk_importance = torch.softmax(student_pos_topk_attn.mean(dim=0), dim=0)
+            # student_qry_topk_importance = torch.softmax(student_qry_topk_attn.mean(dim=0), dim=0)
+            # student_pos_topk_importance = torch.softmax(student_pos_topk_attn.mean(dim=0), dim=0)
+            student_qry_topk_attn_mean = student_qry_topk_attn.mean(dim=0)
+            student_pos_topk_attn_mean = student_pos_topk_attn.mean(dim=0)
+            
+            student_qry_topk_importance = student_qry_topk_attn_mean / student_qry_topk_attn_mean.sum() if student_qry_topk_attn_mean.sum() > 0 else student_qry_topk_attn_mean
+            student_pos_topk_importance = student_pos_topk_attn_mean / student_pos_topk_attn_mean.sum() if student_pos_topk_attn_mean.sum() > 0 else student_pos_topk_attn_mean
             
             teacher_qry_mass = teacher_qry_topk_importance.view(-1, 1)
             teacher_pos_mass = teacher_pos_topk_importance.view(-1, 1)
