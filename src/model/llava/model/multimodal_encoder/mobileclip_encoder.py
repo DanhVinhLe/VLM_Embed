@@ -59,15 +59,20 @@ class MobileCLIPVisionTower(nn.Module):
             self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True
+        # print(self.config["image_cfg"]["model_name"], "vision tower loaded.")
+        # print(self.config["image_cfg"]["image_size"], "image size.")
+        # print(self.config["image_cfg"]["patch_size"], "patch size.")
 
     def feature_select(self, image_forward_outs):
         # Features from penultimate layer
         image_features = image_forward_outs["image_embeddings"]
+        # print(f"Image features shape from vision tower: {image_features.shape}")
 
         # Reshape 4D tensor to 3D
         B, C, H, W = image_features.shape
         image_features = image_features.reshape(B, C, H*W)
         image_features = image_features.transpose(1, 2)
+        # print(f"Image features reshaped to: {image_features.shape}")
         return image_features
 
     def forward(self, images):
@@ -78,6 +83,7 @@ class MobileCLIPVisionTower(nn.Module):
                 return self.forward_images(images)
 
     def forward_images(self, images):
+        # print("Forwarding images through MobileCLIP vision tower...")
         if type(images) is list:
             image_features = []
             for image in images:

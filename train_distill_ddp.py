@@ -23,6 +23,8 @@ from accelerate import Accelerator
 from huggingface_hub import HfApi, HfFolder, Repository, create_repo
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer, HfArgumentParser
 from transformers.integrations import HfDeepSpeedConfig
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Todo
 
 def get_optimizer_params(model, training_args):
@@ -112,8 +114,8 @@ class Trainer:
         
     def run_epoch(self, epoch):
         self.train_data.sampler.set_epoch(epoch)
-        losses, contrastive_losses, kd_losses = [], [], []
-        kd_rkd_losses, ot_losses, kd_dtw_losses = [], [], []
+        losses, contrastive_losses, span_losses = [], [], []
+        kd_rkd_losses, cross_modal_losses, kd_dtw_losses = [], [], []
         
         progress_bar = tqdm(total=len(self.train_data.dataset) // self.training_args.per_device_train_batch_size // self.training_args.gradient_accumulation_steps // dist.get_world_size(), 
                             desc=f"Epoch {epoch}",
@@ -122,24 +124,24 @@ class Trainer:
             batch = to_device(batch, self.device)
             loss_dict = self.distiller(self.criterion, batch)
             loss = loss_dict['loss'] / self.training_args.gradient_accumulation_steps
-            kd_loss = loss_dict.get('kd_loss', torch.tensor(0.0))
+            span_loss = loss_dict.get('span_loss', torch.tensor(0.0))
             contrastive_loss = loss_dict.get('contrastive_loss', torch.tensor(0.0))
             kd_rkd_loss = loss_dict.get('kd_loss_rkd', torch.tensor(0.0))
-            ot_loss = loss_dict.get('ot_loss', torch.tensor(0.0))
+            cross_modal_loss = loss_dict.get('cross_modal_loss', torch.tensor(0.0))
             kd_dtw_loss = loss_dict.get('kd_loss_dtw', torch.tensor(0.0))
 
             losses.append(loss.detach().item() * self.training_args.gradient_accumulation_steps)
             contrastive_losses.append(contrastive_loss.detach().item())
-            kd_losses.append(kd_loss.detach().item())
+            span_losses.append(span_loss.detach().item())
             kd_rkd_losses.append(kd_rkd_loss.detach().item())
-            ot_losses.append(ot_loss.detach().item())
+            cross_modal_losses.append(cross_modal_loss.detach().item())
             kd_dtw_losses.append(kd_dtw_loss.detach().item())
             
             batch_loss = sum(losses) / len(losses)
             batch_contrastive_loss = sum(contrastive_losses) / len(contrastive_losses)
-            batch_kd_loss = sum(kd_losses) / len(kd_losses)
+            batch_kd_loss = sum(span_losses) / len(span_losses)
             batch_kd_rkd_loss = sum(kd_rkd_losses) / len(kd_rkd_losses)
-            batch_ot_loss = sum(ot_losses) / len(ot_losses)
+            batch_cross_modal_loss = sum(cross_modal_losses) / len(cross_modal_losses)
             batch_kd_dtw_loss = sum(kd_dtw_losses) / len(kd_dtw_losses)
             
             loss.backward()
@@ -154,7 +156,7 @@ class Trainer:
                         'kd_loss': f"{batch_kd_loss:.4f}",
                         'contrastive_loss': f"{batch_contrastive_loss:.4f}",
                         'kd_rkd_loss': f"{batch_kd_rkd_loss:.4f}",
-                        'ot_loss': f"{batch_ot_loss:.4f}",
+                        'cross_modal_loss': f"{batch_cross_modal_loss:.4f}",
                         'kd_dtw_loss': f"{batch_kd_dtw_loss:.4f}",
                         'lr': f"{self.lr_scheduler.get_last_lr()[0]:.6f}",
                     })
@@ -173,7 +175,11 @@ class Trainer:
                 
                 student = self.distiller.module.student
                 student.encoder.save_pretrained(ckpt_dir)
-                torch.save(student.encoder.model.model.mm_projector.state_dict(), projector_dir)
+                if self.model_args.model_backbone in ["llava_onevision", "llava_two_vision"]:
+                    torch.save(student.encoder.model.multi_modal_projector.state_dict(), projector_dir)
+                else:
+                    torch.save(student.encoder.model.model.mm_projector.state_dict(), projector_dir)
+
                 student_config = AutoConfig.from_pretrained(self.model_args.model_name) if self.model_args.model_name else None
                 tokenizer = AutoTokenizer.from_pretrained(self.model_args.model_name) if self.model_args.model_name else None
                 if student_config:
@@ -188,13 +194,20 @@ class Trainer:
                     print_rank(f"Warning: Could not save processor: {e}")
                 print_rank(f"Saved checkpoint to {ckpt_dir}")
 
+                ## for evaluation
+                print(f"Start evaluating student at epoch {epoch}")
+            dist.barrier()
+
         if is_main_process():
             final_ckpt_dir = os.path.join(self.training_args.output_dir, f"checkpoint-final")
             projector_dir =  os.path.join(final_ckpt_dir, "mm_projector.pth")
             os.makedirs(final_ckpt_dir, exist_ok=True)
             student = self.distiller.module.student
             student.encoder.save_pretrained(final_ckpt_dir)
-            torch.save(student.encoder.model.model.mm_projector.state_dict(), projector_dir)
+            if self.model_args.model_backbone in ["llava_onevision", "llava_two_vision"]:
+                torch.save(student.encoder.model.multi_modal_projector.state_dict(), projector_dir)
+            else:
+                torch.save(student.encoder.model.model.mm_projector.state_dict(), projector_dir)
             student_config = AutoConfig.from_pretrained(self.model_args.model_name) if self.model_args.model_name else None
             tokenizer = AutoTokenizer.from_pretrained(self.model_args.model_name) if self.model_args.model_name else None
             if student_config:
@@ -208,6 +221,7 @@ class Trainer:
             except Exception as e:
                 print_rank(f"Warning: Could not save processor: {e}")
             print_rank(f"Saved final model to {final_ckpt_dir}")
+        dist.barrier()
                 
                 
 def main():
@@ -248,8 +262,14 @@ def main():
     )
     num_trainable_vision = 0
     for n, p in distiller.student.named_parameters():
-        if "mm_projector" in n:
+        if "mm_projector" in n or "multi_modal_projector" in n:
             p.requires_grad = True
+            
+        if "mm_projector" in n or "multi_modal_projector" in n:
+            p.requires_grad = True
+            
+        if "lm_head" in n:
+            p.requires_grad = False
         if p.requires_grad:
             p.data = p.data.to(torch.bfloat16)
             num_trainable_vision += p.numel()

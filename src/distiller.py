@@ -35,6 +35,7 @@ from peft import LoraConfig, get_peft_model, PeftModel
 from transformers import ProcessorMixin
 from qwen_vl_utils import smart_resize
 from PIL import Image
+from transformers import AutoTokenizer
 
 POS_MOD_CLASS_LABEL = "Represent the class label: "
 POS_MOD_IMAGE_CAPTION = "Represent the image caption: "
@@ -64,12 +65,9 @@ def process_image(image, resolution, max_dim=1344):
     else:
         target_max = max_dim
 
-    # Tính tỉ lệ scale sao cho cạnh lớn nhất = target_max
+    # resize if larger than target_max
     if max_side > target_max:
-        scale = target_max / max_side
-        new_width = int(width * scale)
-        new_height = int(height * scale)
-        image = image.resize((new_width, new_height))
+        image = image.resize((target_max, target_max))
 
     return image
 
@@ -97,9 +95,10 @@ class Distiller(nn.Module):
         self.student_hidden_dim = self.model_args.student_hidden_dim
         self.teacher_hidden_dim = self.model_args.teacher_hidden_dim
         self.temperature = model_args.temperature
-        if self.model_args.projector_config_path is not None:
-            self.set_projector()
-            print("Projectors set.")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_args.teacher_model_name)
+        # if self.model_args.projector_config_path is not None:
+        self.set_projector()
+        print("Projectors set.")
     
     def _create_model_args(self, model_type='teacher'):
         if model_type == 'teacher': 
@@ -149,55 +148,76 @@ class Distiller(nn.Module):
         return processor
     
     def forward(self, criterion, batch):
-        loss = criterion(self, batch)
+        if self.training_args.kd_loss_type in ['span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase' ]:
+            loss = criterion(self, batch, tokenizer = self.tokenizer)
+        else: 
+            loss = criterion(self, batch)
         return loss
     
     def set_projector(self):
-        self.projectors = nn.ModuleDict()
-        projector_config = json.load(open(self.model_args.projector_config_path, 'r'))
+        """
+        Create a list of linear projectors mapping
+        student_hidden_dim -> teacher_hidden_dim
+        One projector per teacher layer mapping.
+        """
+        projector_list = nn.ModuleList()
         
-        name_dict = {
-            "s": self.student_hidden_dim,
-            "t": self.teacher_hidden_dim,
-            "relu": nn.ReLU()
-        }
-        
-        for name, cfg in projector_config.items():
-            if not cfg.get("enabled", False):
-                continue
-            seq = nn.Sequential()
-            parts = cfg["structure"].split("-")
-            parsed = []
+        if self.model_args.projector_config_path is not None:
+            self.projectors = nn.ModuleDict()
+            projector_config = json.load(open(self.model_args.projector_config_path, 'r'))
             
-            for p in parts:
-                if p == "relu":
-                    parsed.append("relu")
-                else:
-                    coef = int(p[:-1]) if len(p) > 1 and p[:-1].isdigit() else 1
-                    parsed.append(coef * name_dict[p[-1]])
-            for i in range(len(parsed) -1):
-                a, b = parsed[i], parsed[i+1]
-                if isinstance(a, int) and isinstance(b, int):
-                    layer = nn.Linear(a, b)
-                    create_semi_orthogonal_matrix(layer.weight)
-                    layer = layer.to(dtype=torch.bfloat16)
-                    seq.append(layer)
-                elif b == "relu":
-                    seq.append(name_dict[b])
-                elif a =="relu" and isinstance(b, int):
-                    prev_out = parsed[i-1] if isinstance(parsed[i-1], int) else None
-                    layer = nn.Linear(prev_out, b)
-                    create_semi_orthogonal_matrix(layer.weight)
-                    layer = layer.to(dtype=torch.bfloat16)
-                    seq.append(layer)
-            self.projectors[name] = seq
-            print(f"Projector {name} created with structure: {seq}")
+            name_dict = {
+                "s": self.student_hidden_dim,
+                "t": self.teacher_hidden_dim,
+                "relu": nn.ReLU()
+            }
+            
+            for name, cfg in projector_config.items():
+                if not cfg.get("enabled", False):
+                    continue
+                seq = nn.Sequential()
+                parts = cfg["structure"].split("-")
+                parsed = []
+                
+                for p in parts:
+                    if p == "relu":
+                        parsed.append("relu")
+                    else:
+                        coef = int(p[:-1]) if len(p) > 1 and p[:-1].isdigit() else 1
+                        parsed.append(coef * name_dict[p[-1]])
+                for i in range(len(parsed) -1):
+                    a, b = parsed[i], parsed[i+1]
+                    if isinstance(a, int) and isinstance(b, int):
+                        layer = nn.Linear(a, b)
+                        create_semi_orthogonal_matrix(layer.weight)
+                        layer = layer.to(dtype=torch.bfloat16)
+                        seq.append(layer)
+                    elif b == "relu":
+                        seq.append(name_dict[b])
+                    elif a =="relu" and isinstance(b, int):
+                        prev_out = parsed[i-1] if isinstance(parsed[i-1], int) else None
+                        layer = nn.Linear(prev_out, b)
+                        create_semi_orthogonal_matrix(layer.weight)
+                        layer = layer.to(dtype=torch.bfloat16)
+                        seq.append(layer)
+                self.projectors[name] = seq
+        else:
+            for _ in range(len(self.training_args.teacher_layer_mapping)):
+                projector = nn.Linear(
+                    self.student_hidden_dim,
+                    self.teacher_hidden_dim,
+                    dtype=torch.bfloat16
+                )
+                projector_list.append(projector)
+
+            self.projectors = projector_list
+        print(f"Created {len(self.projectors)} linear projectors.")
     
     def add_optimizer_param_group(self, optimizer):
-        if hasattr(self, 'projectors'):
+        if hasattr(self, 'projectors') and self.projectors is not None:
             lr = getattr(self.training_args, "projector_lr", None) or self.training_args.learning_rate
             optimizer.add_param_group({
-                "params": [p for proj in self.projectors.values() for p in proj.parameters()],
+                "params": self.projectors.parameters(),
                 "lr": lr
             })
         print("Projector parameters added to optimizer.")

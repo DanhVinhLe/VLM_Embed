@@ -140,8 +140,10 @@ class LlavaMetaForCausalLM(ABC):
 
     def encode_images(self, images):
         image_features = self.get_model().get_vision_tower()(images)
+        # print(f"Image features shape before projector: {image_features.shape}")
         image_features = image_features.to(dtype=torch.bfloat16)
         image_features = self.get_model().mm_projector(image_features)
+        # print(f"Image features shape after projector: {image_features.shape}")
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
@@ -150,6 +152,7 @@ class LlavaMetaForCausalLM(ABC):
     ):
         
         vision_tower = self.get_vision_tower()
+        
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             # Return input ids, position ids, attention mask, past key values, inputs embeds, labels and None for images features
             return input_ids, position_ids, attention_mask, past_key_values, None, labels, None

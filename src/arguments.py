@@ -44,7 +44,9 @@ class ModelArguments:
     student_hidden_dim: int = field(default=896, metadata={"help": "student hidden dim"})
     teacher_hidden_dim: int = field(default=1536, metadata={"help": "teacher hidden dim"})
     load_pretrained_lora: bool = field(default=False, metadata={"help": "load pretrained lora model for student"})
-    #! new args 2
+    #! new args for span loss
+    
+    
 
 @dataclass
 class DataArguments:
@@ -101,7 +103,20 @@ class TrainingArguments(TrainingArguments):
     kd_loss_type: str = field(default="contrastive_rkd", metadata={"help": "type of kd loss, current only support RKD"})
     ds_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
     deepspeed_config: str = field(default=None, metadata={"help": "DeepSpeed config json file path"})
-    
+    # new args for span loss
+    teacher_layer_mapping: List[int] = field(
+        default_factory=list,
+        metadata={"help": "List of teacher layers used for distillation; number of elements equals number of projectors"}
+    )
+    student_layer_mapping: List[int] = field(
+        default_factory=list,
+        metadata={"help": "List of student layers used for distillation; number of elements equals number of projectors"}
+    )
+    split_layer_mapping: List[int] = field(
+        default_factory=list,
+        metadata={"help": "List of split layers for student; number of elements equals number of projectors"}   
+    )
+    w_cross_modal_loss: float = field(default=1.0, metadata={"help": "weight for cross modal loss"})
 @dataclass
 class MTEBArguments:
     device: str = field(default="cuda", metadata={"help": "use cuda for single GPU inference, if multiple GPUs are available it will use DP automatically"})

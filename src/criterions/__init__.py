@@ -4,6 +4,10 @@ from .universal_logit_distillation import UniversalLogitDistillation
 from .propose_with_proj import ProposalLossWithProj
 from .emo_loss import EMOLoss
 from .em_kd import EMKDLoss
+from .em_kd_llava_ov import EMKDLLavaLoss
+from .span_propose import SpanProposeCriterion
+from .span_propose_attn import SpanProposeCriterionWeighted
+from .span_propose_attn_only_phrase import SpanProposeCriterionWeightedOnlyPhrase
 
 criterion_list = {
     "contrastive_rkd": ContrastiveLossWithRKD,
@@ -12,6 +16,10 @@ criterion_list = {
     "proposal_proj": ProposalLossWithProj,
     "emo_loss": EMOLoss,
     "em_kd": EMKDLoss,
+    "em_kd_llava_ov": EMKDLLavaLoss,
+    "span_propose": SpanProposeCriterion,
+    "span_propose_attn": SpanProposeCriterionWeighted,
+    "span_propose_attn_only_phrase": SpanProposeCriterionWeightedOnlyPhrase,
 }
 
 def build_criterion(args):

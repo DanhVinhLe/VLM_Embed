@@ -84,6 +84,7 @@ class LlavaQwen2ForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
         return_dict: Optional[bool] = None,
         cache_position=None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        image_features = None
 
         if inputs_embeds is None:
             # print("Preparing inputs for multimodal forward pass.")
@@ -148,7 +149,7 @@ class LlavaQwen2ForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
                 attention_mask,
                 _,
                 inputs_embeds,
-                _
+                _, _,
             ) = self.prepare_inputs_labels_for_multimodal(
                 inputs,
                 position_ids,
