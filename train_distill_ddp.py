@@ -132,10 +132,22 @@ class Trainer:
 
             losses.append(loss.detach().item() * self.training_args.gradient_accumulation_steps)
             contrastive_losses.append(contrastive_loss.detach().item())
-            span_losses.append(span_loss.detach().item())
-            kd_rkd_losses.append(kd_rkd_loss.detach().item())
-            cross_modal_losses.append(cross_modal_loss.detach().item())
-            kd_dtw_losses.append(kd_dtw_loss.detach().item())
+            try:
+                span_losses.append(span_loss.detach().item())
+            except:
+                span_losses.append(span_loss)
+            try:
+                kd_rkd_losses.append(kd_rkd_loss.detach().item())
+            except:
+                kd_rkd_losses.append(kd_rkd_loss)
+            try:
+                cross_modal_losses.append(cross_modal_loss.detach().item())
+            except:
+                cross_modal_losses.append(cross_modal_loss)
+            try:
+                kd_dtw_losses.append(kd_dtw_loss.detach().item())
+            except:
+                kd_dtw_losses.append(kd_dtw_loss)
             
             batch_loss = sum(losses) / len(losses)
             batch_contrastive_loss = sum(contrastive_losses) / len(contrastive_losses)
@@ -274,6 +286,11 @@ def main():
             p.data = p.data.to(torch.bfloat16)
             num_trainable_vision += p.numel()
     print_rank(f"Number of trainable vision parameters: {num_trainable_vision}")
+    
+    if training_args.kd_loss_type in ['span_propose_wo_hid_cross', 'span_propose_wo_hid_intra']:
+        if hasattr(distiller, 'projectors'):
+            for n, p in distiller.projectors.named_parameters():
+                p.requires_grad = False
     
     optimizer = AdamW(
         distiller.student.parameters(),
