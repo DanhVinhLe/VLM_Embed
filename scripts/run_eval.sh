@@ -6,10 +6,12 @@
 # Example: ./scripts/run_eval.sh training/RKD/checkpoint-final eval_outputs/RKD ImageNet_1K
 # =========================================================================
 
-MODEL_PATH=${1:-"training/RKD/checkpoint-final"}
-OUTPUT_DIR=${2:-"eval_outputs/RKD"}
-SUBSET=${3:-"ImageNet-1K"}  # Default to ImageNet_1K, or pass "all" or list
-
+# MODEL_PATH=${1:-"training/RKD/checkpoint-final"}
+# OUTPUT_DIR=${2:-"eval_outputs/RKD"}
+# SUBSET=${3:-"ImageNet-1K"}  # Default to ImageNet_1K, or pass "all" or list
+MODEL_PATH="apple/FastVLM-0.5B"
+OUTPUT_DIR=eval_outputs/student-base/full
+SUBSET="ImageNet-1K N24News HatefulMemes VOC2007 SUN397"
 # Absolute paths
 REPO_ROOT=$(pwd)
 export PYTHONPATH=$REPO_ROOT:$PYTHONPATH
@@ -43,7 +45,7 @@ if [ "$NUM_GPUS" -gt 1 ]; then
         --dataset_name "TIGER-Lab/MMEB-eval" \
         --subset_name "${SUBSETS[@]}" \
         --dataset_split "test" \
-        --per_device_eval_batch_size 16 \
+        --per_device_eval_batch_size 128 \
         --image_dir "eval_images/" \
         --pooling "eos" \
         --model_backbone "llava_qwen2" \
@@ -61,7 +63,7 @@ else
         --dataset_name "TIGER-Lab/MMEB-eval" \
         --subset_name "${SUBSETS[@]}" \
         --dataset_split "test" \
-        --per_device_eval_batch_size 16 \
+        --per_device_eval_batch_size 128 \
         --image_dir "eval_images/" \
         --pooling "eos" \
         --model_backbone "llava_qwen2" \

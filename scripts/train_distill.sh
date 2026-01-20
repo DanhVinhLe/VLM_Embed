@@ -32,7 +32,7 @@ deepspeed --num_gpus=$NUM_GPUS $TRAIN_SCRIPT \
     --image_dir "vlm2vec_train/MMEB-train" \
     --percent_data 0.3 \
     --output_dir "training/deepspeed_projector_cls_v2" \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size64 \
     --gradient_accumulation_steps 1 \
     --deepspeed_config $DS_CONFIG \
     --learning_rate 1e-4 \

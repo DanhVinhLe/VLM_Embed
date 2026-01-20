@@ -30,7 +30,7 @@ torchrun --standalone \
     --image_dir "vlm2vec_train/MMEB-train" \
     --percent_data 1.0 \
     --output_dir "training/meta_span_weighted_vqa" \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --learning_rate 1e-4 \
     --num_train_epochs 1 \
