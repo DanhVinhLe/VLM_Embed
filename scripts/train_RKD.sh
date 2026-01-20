@@ -1,10 +1,15 @@
 #!/bin/bash
+# 1. Train fast
+# ./scripts/train_RKD.sh
+# # 2. Evaluate fast (after training finishes)
+# ./scripts/run_eval.sh training/RKD/checkpoint-final eval_outputs/RKD ImageNet_1K
+
 
 # Số lượng GPU trên mỗi node (máy)
-NUM_GPUS_PER_NODE=1
+NUM_GPUS_PER_NODE=8
 
 # Đường dẫn tới file script training của bạn
-TRAIN_SCRIPT="train_distill_no_deepspeed.py"
+TRAIN_SCRIPT="main.py"
 
 # =========================================================================
 # Dùng torchrun để khởi chạy
@@ -21,7 +26,7 @@ torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
     --model_backbone "llava_qwen2" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
-    --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" "VisDial" "CIRR" "VisualNews_t2i" "VisualNews_i2t" "MSCOCO_i2t" "MSCOCO_t2i" "NIGHTS" "WebQA" "MSCOCO" \
+    --subset_name "ImageNet_1K" \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
     --output_dir "training/RKD" \
