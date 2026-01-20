@@ -28,6 +28,9 @@ from numba import jit, prange
 from torch.autograd import Function
 from numba import cuda
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------------------------------------------------------------
 @cuda.jit
@@ -319,7 +322,7 @@ class SoftDTW(torch.nn.Module):
         use_cuda = self.use_cuda
 
         if use_cuda and (lx > 1024 or ly > 1024):  # We should be able to spawn enough threads in CUDA
-                # print("SoftDTW: Cannot use CUDA because the sequence length > 1024 (the maximum block size supported by CUDA)")
+                # logger.warning("SoftDTW: Cannot use CUDA because the sequence length > 1024 (the maximum block size supported by CUDA)")
                 use_cuda = False
 
         # Finally, return the correct function
@@ -350,8 +353,8 @@ class SoftDTW(torch.nn.Module):
 
         if self.normalize:
             # Stack everything up and run
-            print("SoftDTW: Using normalization")
-            print(f"X: {X.shape}, Y: {Y.shape}")
+            logger.info("SoftDTW: Using normalization")
+            logger.info(f"X: {X.shape}, Y: {Y.shape}")
             x = torch.cat([X, X, Y])
             y = torch.cat([Y, X, Y])
             D = self.dist_func(x, y)

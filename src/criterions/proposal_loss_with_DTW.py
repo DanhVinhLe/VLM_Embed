@@ -1,18 +1,37 @@
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
-from .soft_DTW import SoftDTW
-import logging
+import wandb
 from tslearn.metrics import SoftDTWLossPyTorch
 
+from .soft_DTW import SoftDTW
+
+logger = logging.getLogger(__name__)
 logging.getLogger("numba").setLevel(logging.ERROR)
 
-import wandb
 
 class ProposalLossWithDTW(nn.Module):
-    def __init__(self, args):
+    """
+    Proposal Loss with Dynamic Time Warping (DTW) and Optimal Transport (OT).
+
+    Combines:
+    1. Contrastive Loss.
+    2. RKD (Relational Knowledge Distillation) Loss (Distance and Angle).
+    3. DTW Loss for image feature alignment.
+    4. OT Loss (Sinkhorn) for text token alignment.
+    """
+    def __init__(self, args: Any):
+        """
+        Initializes the ProposalLossWithDTW module.
+
+        Args:
+            args: Configuration arguments.
+        """
         super(ProposalLossWithDTW, self).__init__()
         self.args = args
         self.kd_loss_weight = self.args.kd_weight
@@ -30,7 +49,10 @@ class ProposalLossWithDTW(nn.Module):
             self.world_size = 1
             self.process_rank = 0
             
-    def _dist_gather_tensor(self, t: Tensor):
+    def _dist_gather_tensor(self, t: Tensor) -> Tensor:
+        """
+        Gathers tensors from all processes in distributed setting.
+        """
         t = t.contiguous()
         all_tensors = [torch.empty_like(t) for _ in range(self.world_size)]
         dist.all_gather(all_tensors, t)
@@ -290,7 +312,7 @@ class ProposalLossWithDTW(nn.Module):
             pos_topk_importance = [imp for _, _, imp in topk_results[i]['pos_topk']]
 
             if len(qry_topk_idx) == 0 or len(pos_topk_idx) == 0:
-                print("Warning: No top-k tokens found for OT loss computation for instance ", i)
+                logger.warning(f"Warning: No top-k tokens found for OT loss computation for instance {i}")
                 continue
             
             s_qry_topk_idx = [idx for idx in student_idx[i]['qry'] if idx < student_qry_hidden_states[-1][i].size(0)]
@@ -426,8 +448,10 @@ class ProposalLossWithDTW(nn.Module):
         dist = norm + norm.t() - 2.0 * torch.mm(x, x.t())
         return dist
     
-    def compute_distance_loss(self, student_qry, student_pos, teacher_qry, teacher_pos):
-        
+    def compute_distance_loss(self, student_qry: Tensor, student_pos: Tensor, teacher_qry: Tensor, teacher_pos: Tensor) -> Tensor:
+        """
+        Computes RKD distance loss.
+        """
         student_repr = torch.cat([student_qry, student_pos], dim=0)
         teacher_repr = torch.cat([teacher_qry, teacher_pos], dim=0)
         
@@ -462,8 +486,10 @@ class ProposalLossWithDTW(nn.Module):
         cos_angles = torch.einsum('ijd,kjd->ijk', e, e)
         return cos_angles
     
-    def compute_angle_loss(self, student_qry, student_pos, teacher_qry, teacher_pos):
-        
+    def compute_angle_loss(self, student_qry: Tensor, student_pos: Tensor, teacher_qry: Tensor, teacher_pos: Tensor) -> Tensor:
+        """
+        Computes RKD angle loss.
+        """
         student_repr = torch.cat([student_qry, student_pos], dim=0)
         teacher_repr = torch.cat([teacher_qry, teacher_pos], dim=0)
         

@@ -1,15 +1,27 @@
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
 
+logger = logging.getLogger(__name__)
+
+
 class CKALoss(nn.Module):
-    def __init__(self, eps=1e-8):
+    """
+    Centered Kernel Alignment (CKA) Loss.
+    """
+    def __init__(self, eps: float = 1e-8):
         super().__init__()
         self.eps = eps
 
-    def forward(self, SH, TH):
+    def forward(self, SH: Tensor, TH: Tensor) -> Tensor:
+        """
+        Computes CKA loss.
+        """
         dT = TH.size(-1)
         dS = SH.size(-1)
         SH = SH.view(-1, dS).to(torch.float64)
@@ -25,7 +37,16 @@ class CKALoss(nn.Module):
         return 1 - num / torch.sqrt(den1 * den2)
 
 class ProposalLossWithProj(nn.Module):
-    def __init__(self, args):
+    """
+    Proposal Loss with extra projection heads and Attention CKA Loss.
+    """
+    def __init__(self, args: Any):
+        """
+        Initializes the ProposalLossWithProj module.
+
+        Args:
+            args: Configuration arguments.
+        """
         super(ProposalLossWithProj, self).__init__()
         self.args = args
         self.kd_loss_weight = self.args.kd_weight
@@ -42,7 +63,10 @@ class ProposalLossWithProj(nn.Module):
             self.world_size = 1
             self.process_rank = 0
             
-    def _dist_gather_tensor(self, t: Tensor):
+    def _dist_gather_tensor(self, t: Tensor) -> Tensor:
+        """
+        Gathers tensors from all processes.
+        """
         t = t.contiguous()
         all_tensors = [torch.empty_like(t) for _ in range(self.world_size)]
         dist.all_gather(all_tensors, t)
@@ -151,7 +175,7 @@ class ProposalLossWithProj(nn.Module):
 
             qry_imp = qry_imp * qry_mask.float()
             pos_imp = pos_imp * pos_mask.float()
-            # print(f"Num text tokens - QRY: {num_text_qry_tokens[i]}, POS: {num_text_pos_tokens[i]}")
+            # logger.debug(f"Num text tokens - QRY: {num_text_qry_tokens[i]}, POS: {num_text_pos_tokens[i]}")
             qry_topk_idx = torch.topk(qry_imp, min(num_text_qry_tokens[i]//2, int(qry_mask.sum().item()))).indices
             pos_topk_idx = torch.topk(pos_imp, min((num_text_pos_tokens[i]+1)//2, int(pos_mask.sum().item()))).indices
 
@@ -162,8 +186,8 @@ class ProposalLossWithProj(nn.Module):
                 "qry_topk": qry_topk,
                 "pos_topk": pos_topk
             })
-            # print(f"Instance {i}: QRY top-k tokens (index, id, importance): {qry_topk}")
-            # print(f"Instance {i}: POS top-k tokens (index, id, importance): {pos_topk}")
+            # logger.debug(f"Instance {i}: QRY top-k tokens (index, id, importance): {qry_topk}")
+            # logger.debug(f"Instance {i}: POS top-k tokens (index, id, importance): {pos_topk}")
 
         return results
     
@@ -223,7 +247,7 @@ class ProposalLossWithProj(nn.Module):
         device = input_data['student_inputs']['qry']['input_ids'].device
         # batch_size = input_data['student_inputs']['qry']['input_ids'].size(0)
         batch_size = len(topk_results)
-        # print("Batch size for attention loss computation:", batch_size)
+        # logger.debug(f"Batch size for attention loss computation: {batch_size}")
         att_loss_total = 0.0
         
         cka_fn_loss = CKALoss(eps=1e-8).to(device)
@@ -251,17 +275,17 @@ class ProposalLossWithProj(nn.Module):
         student_idx = self.extract_student_indices(input_data, topk_results)
         
         for i in range(batch_size):
-            # print(f"Top k tokens for instance {i}: QRY - {topk_results[i]['qry_topk']}, POS - {topk_results[i]['pos_topk']}")
+            # logger.debug(f"Top k tokens for instance {i}: QRY - {topk_results[i]['qry_topk']}, POS - {topk_results[i]['pos_topk']}")
             qry_topk_idx = [idx for idx, _, _ in topk_results[i]['qry_topk']]
             pos_topk_idx = [idx for idx, _, _ in topk_results[i]['pos_topk']]
             
             if len(qry_topk_idx) == 0 or len(pos_topk_idx) == 0:
-                print("Warning: No valid top-k tokens found for instance {}, skipping attention loss computation.".format(i))
+                logger.warning(f"Warning: No valid top-k tokens found for instance {i}, skipping attention loss computation.")
                 continue
             
             s_qry_topk_idx = [idx for idx in student_idx[i]['qry'] if idx < student_qry_first.size(2)]
             s_pos_topk_idx = [idx for idx in student_idx[i]['pos'] if idx < student_pos_first.size(2)]
-            # print(f"Mapped student indices for instance {i}: QRY - {s_qry_topk_idx}, POS - {s_pos_topk_idx}")
+            # logger.debug(f"Mapped student indices for instance {i}: QRY - {s_qry_topk_idx}, POS - {s_pos_topk_idx}")
             
             tq_mean = teacher_qry_first[i, :, qry_topk_idx, :].mean(dim=0)
             tp_mean = teacher_pos_first[i, :, pos_topk_idx, :].mean(dim=0)
@@ -275,7 +299,7 @@ class ProposalLossWithProj(nn.Module):
             sq_mean = torch.where(sq_mean <= -1e2, torch.zeros_like(sq_mean), sq_mean)
             tp_mean = torch.where(tp_mean <= -1e2, torch.zeros_like(tp_mean), tp_mean)
             sp_mean = torch.where(sp_mean <= -1e2, torch.zeros_like(sp_mean), sp_mean)
-            # print(f"Shape of means for instance {i}: tq_mean {tq_mean.shape}, tp_mean {tp_mean.shape}, sq_mean {sq_mean.shape}, sp_mean {sp_mean.shape}")
+            # logger.debug(f"Shape of means for instance {i}: tq_mean {tq_mean.shape}, tp_mean {tp_mean.shape}, sq_mean {sq_mean.shape}, sp_mean {sp_mean.shape}")
             # calculate CKA loss
             att_loss = cka_fn_loss(tq_mean, sq_mean) + cka_fn_loss(tp_mean, sp_mean)
             att_loss_total += att_loss / 2
@@ -308,7 +332,7 @@ class ProposalLossWithProj(nn.Module):
             sp_mean = torch.where(sp_mean <= -1e2, torch.zeros_like(sp_mean), sp_mean)
             att_loss = cka_fn_loss(tq_mean, sq_mean) + cka_fn_loss(tp_mean, sp_mean)
             att_loss_total += att_loss / 2
-        # print("Total attention loss before averaging:", att_loss_total.item())
+        # logger.debug(f"Total attention loss before averaging: {att_loss_total.item()}")
         return att_loss_total / batch_size
     
     

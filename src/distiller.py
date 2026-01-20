@@ -11,35 +11,37 @@ The general flow is:
    and passing the data to a loss function (criterion).
 """
 
-import os
 import json
+import logging
 import math
-from typing import Dict, Tuple, Optional, Any, List, Union
+import os
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from datasets import concatenate_datasets, load_dataset
 from PIL import Image
+from torch.utils.data import Dataset
 from transformers import (
     AutoTokenizer,
-    ProcessorMixin,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
 )
-from datasets import load_dataset, concatenate_datasets
-from torch.utils.data import Dataset
 
+from src.arguments import DataArguments, ModelArguments, TrainingArguments
 from src.model.model import MMEBModel
 from src.model.processor import (
+    PHI3V,
     VLM_IMAGE_TOKENS,
     load_processor,
     process_vlm_inputs_fns,
-    PHI3V,
 )
 from src.utils import print_rank
-from src.arguments import ModelArguments, DataArguments, TrainingArguments
 
+logger = logging.getLogger(__name__)
 
 # Global constants defining the instruction prompts for different tasks.
-# These prefixes are prepended to the positive text samples to guide the model's generation 
+# These prefixes are prepended to the positive text samples to guide the model's generation
 # or embedding representation during training (Instruction Tuning).
 
 POS_MOD_CLASS_LABEL = "Represent the class label: "
@@ -47,7 +49,7 @@ POS_MOD_IMAGE_CAPTION = "Represent the image caption: "
 POS_MOD_ANSWER = "Represent the answer: "
 
 # Mapping from dataset names to their corresponding instruction prompts.
-# This ensures that each dataset (like ImageNet, OK-VQA, MSCOCO) gets the correct 
+# This ensures that each dataset (like ImageNet, OK-VQA, MSCOCO) gets the correct
 # task-specific instruction.
 POS_MOD_DICT = {
     "ImageNet_1K": POS_MOD_CLASS_LABEL,
@@ -113,9 +115,9 @@ def process_image(image: Image.Image, resolution: str, max_dim: int = 1344) -> O
 def create_semi_orthogonal_matrix(tensor: torch.Tensor) -> torch.Tensor:
     """
     Initializes a tensor with a semi-orthogonal matrix using QR decomposition.
-    
+
     This technique ensures that the initial projection weights preserve the norm of vectors
-    and their relative angles as much as possible, which stabilizes training for 
+    and their relative angles as much as possible, which stabilizes training for
     high-dimensional feature alignment tasks.
 
     Args:
@@ -157,21 +159,21 @@ class Distiller(nn.Module):
         super(Distiller, self).__init__()
         self.model_args = model_args
         self.training_args = training_args
-        
+
         # Load models
         self.student = self._load_student()
         self.teacher = self._load_teacher()
-        
+
         self.student_hidden_dim: int = self.model_args.student_hidden_dim
         self.teacher_hidden_dim: int = self.model_args.teacher_hidden_dim
         self.temperature: float = model_args.temperature
-        
+
         # Tokenizer is needed for certain loss types that might involve text decoding/matching
         self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(self.model_args.teacher_model_name)
-        
+
         # Setup projection layers to map student space to teacher space
         self.set_projector()
-        print("Projectors set.")
+        logger.info("Projectors set.")
 
     def _create_model_args(self, model_type: str = 'teacher') -> ModelArguments:
         """
@@ -207,21 +209,21 @@ class Distiller(nn.Module):
 
     def _load_student(self) -> nn.Module:
         """Loads the student model (trainable)."""
-        print("Load student with lora rank:", self.model_args.lora_r)
-        print("Student use lora:", self.model_args.lora)
+        logger.info(f"Load student with lora rank: {self.model_args.lora_r}")
+        logger.info(f"Student use lora: {self.model_args.lora}")
         student = MMEBModel.build(self.model_args)
-        print("Student model built.")
+        logger.info("Student model built.")
         return student
 
     def _load_teacher(self) -> nn.Module:
         """Loads the teacher model and freezes its parameters (inference only)."""
         model_args = self._create_model_args('teacher')
-        print("Load teacher with lora rank:", model_args.lora_r)
-        print("Teacher use lora:", model_args.lora)
+        logger.info(f"Load teacher with lora rank: {model_args.lora_r}")
+        logger.info(f"Teacher use lora: {model_args.lora}")
         teacher = MMEBModel.load(model_args, is_trainable=False)
         for param in teacher.parameters():
             param.requires_grad = False
-        print("Teacher model loaded.")
+        logger.info("Teacher model loaded.")
         return teacher
 
     def get_student_processor(self) -> ProcessorMixin:
@@ -230,20 +232,20 @@ class Distiller(nn.Module):
         Crucial for correct tokenization/image formatting.
         """
         processor = load_processor(self.model_args, None)
-        print("Student processor loaded.")
+        logger.info("Student processor loaded.")
         return processor
 
     def get_teacher_processor(self) -> ProcessorMixin:
         """Gets the processor needed to prepare inputs for the teacher model."""
         model_args = self._create_model_args('teacher')
         processor = load_processor(model_args, None)
-        print("Teacher processor loaded.")
+        logger.info("Teacher processor loaded.")
         return processor
 
     def forward(self, criterion: Any, batch: Dict[str, Any]) -> torch.Tensor:
         """
         Forward pass for distillation.
-        
+
         NOTE: This module delegates the actual loss calculation to the `criterion` object.
         The `criterion` is expected to take `self` (the distiller model) and the `batch`
         to compute the distillation loss (e.g., KL Divergence, MSE).
@@ -255,8 +257,9 @@ class Distiller(nn.Module):
         Returns:
             The calculated scalar loss tensor.
         """
-        if self.training_args.kd_loss_type in ['span_propose_attn', 'span_propose',
-                                               'span_propose_attn_only_phrase']:
+        if self.training_args.kd_loss_type in [
+            'span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase'
+        ]:
             loss = criterion(self, batch, tokenizer=self.tokenizer)
         else:
             loss = criterion(self, batch)
@@ -266,7 +269,7 @@ class Distiller(nn.Module):
         """
         Creates linear (or non-linear) projectors to map:
         Student Hidden States -> Teacher Hidden States.
-        
+
         This allows us to compare feature vectors even if the models have different dimensions.
         """
         projector_list = nn.ModuleList()
@@ -288,7 +291,7 @@ class Distiller(nn.Module):
                 if not cfg.get("enabled", False):
                     continue
                 seq = nn.Sequential()
-                
+
                 # Config structure format example: "s-4096-relu-t"
                 parts = cfg["structure"].split("-")
                 parsed = []
@@ -301,7 +304,7 @@ class Distiller(nn.Module):
                         # Extract coefficient (e.g., "2s" -> 2 * student_dim)
                         coef = int(p[:-1]) if len(p) > 1 and p[:-1].isdigit() else 1
                         parsed.append(coef * name_dict[p[-1]])
-                
+
                 # Build the sequential module from parsed parts
                 for i in range(len(parsed) - 1):
                     a, b = parsed[i], parsed[i + 1]
@@ -309,7 +312,7 @@ class Distiller(nn.Module):
                         # Linear Layer definition
                         layer = nn.Linear(a, b)
                         create_semi_orthogonal_matrix(layer.weight)
-                        layer = layer.to(dtype=torch.bfloat16) # FORCE bfloat16
+                        layer = layer.to(dtype=torch.bfloat16)  # FORCE bfloat16
                         seq.append(layer)
                     elif b == "relu":
                         # Activation
@@ -333,12 +336,12 @@ class Distiller(nn.Module):
                 projector_list.append(projector)
 
             self.projectors = projector_list
-        print(f"Created {len(self.projectors)} linear projectors.")
+        logger.info(f"Created {len(self.projectors)} linear projectors.")
 
     def add_optimizer_param_group(self, optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
         """
         Adds projector parameters to the optimizer.
-        This is necessary because projectors are initialized *after* the main model 
+        This is necessary because projectors are initialized *after* the main model
         and might need a different learning rate (projector_lr).
 
         Args:
@@ -353,7 +356,7 @@ class Distiller(nn.Module):
                 "params": self.projectors.parameters(),
                 "lr": lr
             })
-        print("Projector parameters added to optimizer.")
+        logger.info("Projector parameters added to optimizer.")
         return optimizer
 
 
@@ -403,7 +406,7 @@ class DistillationCollator:
         """
         texts: List[str] = []
         visual_inputs: List[Optional[Image.Image]] = []
-        
+
         for example in batch:
             if example is None or not example:
                 # Handle corrupted/empty examples
@@ -417,7 +420,7 @@ class DistillationCollator:
                     text = [text]
                 if not isinstance(raw_images, list):
                     raw_images = [raw_images]
-                
+
                 # Check for empty content
                 if not text and not raw_images:
                     text, visual_input = ' ', None
@@ -430,14 +433,14 @@ class DistillationCollator:
                             t, img = ' ', None
                         texts.append(t)
                         visual_inputs.append(img)
-                        
+
         inputs = {'text': texts, 'images': visual_inputs}
         return inputs
 
     def __call__(self, examples: List[Any]) -> Dict[str, Any]:
         """
         Collates a list of examples into a batch.
-        
+
         This involves:
         1. Extracting student-specific inputs (Query/Pos).
         2. Extracting teacher-specific inputs (Query/Pos).
@@ -516,25 +519,25 @@ class DistillationDataset(Dataset):
                 subset,
                 split=f"{self.data_args.dataset_split}"
             )
-            
+
             # Special preprocessing for WebQA
             if subset == "WebQA" and "qry" in subset_data.column_names:
                 subset_data = subset_data.map(
                     lambda x: {"qry": x["qry"].replace("<|image_1|>", "").strip()}
                 )
                 print_rank("Preprocessed WebQA to remove <image_1> tokens in queries.")
-            
+
             # Data sub-sampling
             total_samples = len(subset_data)
             num_samples_to_keep = math.ceil(total_samples * self.data_args.percent_data)
             subset_data = subset_data.select(range(num_samples_to_keep))
-            
+
             # Add instruction prefixes (Instruction Tuning)
             subset_data = subset_data.add_column(
                 "pos_text_instruction",
                 [POS_MOD_DICT.get(subset, "") + text for text in subset_data['pos_text']]
             )
-            
+
             # Column cleanup
             subset_data = subset_data.remove_columns(
                 set(['neg_text', 'neg_image_path']) & set(subset_data.column_names)
@@ -578,12 +581,12 @@ class DistillationDataset(Dataset):
         except Exception as e:
             # Important: We silently fail here to avoid crashing the whole training job
             # but this might lead to empty batches if not handled downstream.
-            print(f"Error opening image {full_img_path}: {e}")
+            logger.error(f"Error opening image {full_img_path}: {e}")
             return None
 
         image = image.convert("RGB")
         width, height = image.size
-        
+
         # Pad small images to at least 16x16
         MIN_SIZE = 16
         if width < MIN_SIZE or height < MIN_SIZE:
@@ -594,7 +597,7 @@ class DistillationDataset(Dataset):
             y_offset = (new_height - height) // 2
             result.paste(image, (x_offset, y_offset))
             image = result
-            
+
         # Resize if the backbone is not Phi-3 (Phi-3 has its own resizing logic inside processor)
         if backbone != PHI3V and self.data_args.image_resolution:
             return process_image(image, self.data_args.image_resolution)
@@ -632,23 +635,23 @@ class DistillationDataset(Dataset):
 
         for qry_text, qry_image_path, pos_text, pos_image_path in zip(
                 qry_texts, qry_image_paths, pos_texts, pos_image_paths):
-            
+
             # Prepare Student Inputs
             stu_qry_text, stu_pos_text = qry_text, pos_text
-            
+
             # TOKEN REPLACEMENT LOGIC:
             # The dataset might contain PHI3V specific image tokens. We need to swap them
             # if the current student/teacher model uses a different token (e.g. <image> vs <|image|>).
             if student_backbone != PHI3V:
                 stu_qry_text = stu_qry_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone])
                 stu_pos_text = stu_pos_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[student_backbone])
-            
+
             stu_qry_image = self._get_image(qry_image_path, student_backbone)
             stu_pos_image = self._get_image(pos_image_path, student_backbone)
 
             # Skip empty pairs (safeguard against bad data)
             if (not stu_qry_text and not stu_qry_image) or (not stu_pos_text and not stu_pos_image):
-                print("empty inputs")
+                logger.warning("Empty inputs detected in student processing.")
                 continue
 
             student_qry_texts.append(stu_qry_text)
@@ -661,12 +664,12 @@ class DistillationDataset(Dataset):
             if teacher_backbone != PHI3V:
                 teacher_qry_text = teacher_qry_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[teacher_backbone])
                 teacher_pos_text = teacher_pos_text.replace(VLM_IMAGE_TOKENS[PHI3V], VLM_IMAGE_TOKENS[teacher_backbone])
-            
+
             teacher_qry_image = self._get_image(qry_image_path, teacher_backbone)
             teacher_pos_image = self._get_image(pos_image_path, teacher_backbone)
 
             if (not teacher_qry_text and not teacher_qry_image) or (not teacher_pos_text and not teacher_pos_image):
-                print("empty inputs")
+                logger.warning("Empty inputs detected in teacher processing.")
                 continue
             teacher_qry_texts.append(teacher_qry_text)
             teacher_qry_images.append(teacher_qry_image)

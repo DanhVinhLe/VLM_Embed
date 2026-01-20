@@ -1,21 +1,25 @@
+import logging
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 import numpy as np
 from transformers import AutoTokenizer
-from src.utils import print_rank 
 import hdbscan
-
 import spacy
 from spacy.matcher import Matcher
 from sklearn.cluster import DBSCAN
 
+from src.utils import print_rank 
+
+logger = logging.getLogger(__name__)
 
 # ====== Text Processing Functions ======
 
-def filter_overlapping_spans(spans):
-    """Lọc các span chồng lấp."""
+def filter_overlapping_spans(spans: List[Tuple[int, int, Any]]) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+    """Filters overlapping spans."""
     sorted_spans = sorted(spans, key=lambda s: (s[0], -s[1]))
     filtered = []
     words = []
@@ -45,8 +49,8 @@ def filter_overlapping_spans(spans):
     return filtered, words
 
 
-def get_spans_offsets(texts, nlp, matcher):
-    """Trích xuất spans, words từ texts."""
+def get_spans_offsets(texts: List[str], nlp: Any, matcher: Any) -> Tuple[List[Any], List[List[Tuple[int, int]]], List[List[Tuple[int, int]]]]:
+    """Extracts spans and words offsets from texts."""
     disabled_components = ["ner", "lemmatizer"]
     spans = []
     words = []
@@ -71,17 +75,17 @@ def get_spans_offsets(texts, nlp, matcher):
 
 # ====== Vision Clustering Functions ======
 
-def get_patch_coordinates(patch_idx, num_patch_per_row, patch_size):
-    """Tinh tọa độ center của patch trên ảnh"""
+def get_patch_coordinates(patch_idx: int, num_patch_per_row: int, patch_size: int) -> Tuple[float, float]:
+    """Calculates patch coordinates."""
     row = patch_idx // num_patch_per_row
     col = patch_idx % num_patch_per_row
     center_x = col * patch_size + patch_size / 2
     center_y = row * patch_size + patch_size / 2
     return center_x, center_y
 
-def compute_vision_distance_matrix(hidden_states, num_pathches_per_row, patch_size, 
-                                   image_width, image_height, spatial_weight=0.15):
-    # tính distance matrix cho hdbscan
+def compute_vision_distance_matrix(hidden_states: torch.Tensor, num_pathches_per_row: int, patch_size: int, 
+                                   image_width: int, image_height: int, spatial_weight: float = 0.15) -> np.ndarray:
+    """Computes vision distance matrix."""
     num_tokens = hidden_states.size(0)
     device = hidden_states.device
     hidden_norm = F.normalize(hidden_states, p=2, dim=-1)
@@ -101,8 +105,8 @@ def compute_vision_distance_matrix(hidden_states, num_pathches_per_row, patch_si
     total_dist = cosine_distance + spatial_weight * spatial_distance_norm
     return total_dist.cpu().numpy()
 
-def cluster_vision_tokens_hdbscan(hidden_states, num_patches_per_row, patch_size, image_width, image_height, min_cluster_size=3):
-    """Phân cụm vision tokens bằng HDBSCAN"""
+def cluster_vision_tokens_hdbscan(hidden_states: torch.Tensor, num_patches_per_row: int, patch_size: int, image_width: int, image_height: int, min_cluster_size: int = 3) -> np.ndarray:
+    """Clusters vision tokens using HDBSCAN."""
     
     if hidden_states.size(0) < min_cluster_size:
         return np.zeros(hidden_states.size(0), dtype=np.int32)
@@ -140,12 +144,12 @@ def cluster_vision_tokens_hdbscan(hidden_states, num_patches_per_row, patch_size
         cluster_labels = np.zeros(hidden_states.size(0), dtype=np.int32)
     return cluster_labels
 
-def map_teacher_clusters_to_student(cluster_labels, 
-                                    teacher_num_patches_per_row, teacher_patch_size, 
-                                    student_num_patches_per_row, student_patch_size,
-                                    original_width, original_height,
-                                    student_resize=1024):
-    """Map cluster labels từ teacher sang student dựa trên vị trí patch"""
+def map_teacher_clusters_to_student(cluster_labels: np.ndarray, 
+                                    teacher_num_patches_per_row: int, teacher_patch_size: int, 
+                                    student_num_patches_per_row: int, student_patch_size: int,
+                                    original_width: int, original_height: int,
+                                    student_resize: int = 1024) -> Tuple[Dict[int, List[int]], List[int]]:
+    """Maps teacher clusters to student patches."""
     num_teacher_tokens = len(cluster_labels)
     num_student_tokens = (student_resize // student_patch_size) ** 2
     
@@ -808,29 +812,27 @@ def compute_cross_modal_loss_for_layer(projectors,
     
     return loss
 
-def compute_text_span_loss_weighted(projectors, 
-                           student_text_hidden_list, 
-                           teacher_text_hidden_list,
-                           offset_mapping,
-                           spans_offsets,
-                           words_offsets,
-                           args):
+def compute_text_span_loss_weighted(projectors: nn.ModuleList, 
+                           student_text_hidden_list: List[torch.Tensor], 
+                           teacher_text_hidden_list: List[torch.Tensor],
+                           offset_mapping: torch.Tensor,
+                           spans_offsets: List[Tuple[int, int]],
+                           words_offsets: List[Tuple[int, int]],
+                           args: Any) -> Tuple[torch.Tensor, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
-    Tính span loss cho một sample.
+    Computes weighted span loss for a single sample.
     
     Args:
         projectors: List of projection layers
-        student_text_hidden_list: List of (TextSeqLen, D_s) cho mỗi layer
-        teacher_text_hidden_list: List of (TextSeqLen, D_t) cho mỗi layer
+        student_text_hidden_list: List of (TextSeqLen, D_s) per layer
+        teacher_text_hidden_list: List of (TextSeqLen, D_t) per layer
         offset_mapping: (TextSeqLen, 2)
         spans_offsets: List[Tuple[int, int]]
         words_offsets: List[Tuple[int, int]]
-        student_layer_mapping: List of student layer indices
-        teacher_layer_mapping: List of teacher layer indices
         args: training arguments
     
     Returns:
-        Scalar loss
+        total_loss, span_info_words, span_info_spans
     """
     device = student_text_hidden_list[0].device
     
@@ -876,15 +878,15 @@ def compute_text_span_loss_weighted(projectors,
     
     return total_loss, span_info_words, span_info_spans
 
-def compute_vision_cluster_loss_weighted(projectors,
-                                student_vision_hidden_list, 
-                                teacher_vision_hidden_list,
-                                original_width, original_height,
-                                args,
-                                teacher_patch_size=28,
-                                student_patch_size=64,
-                                student_resize=1024):
-    """Tính vision cluster loss cho một sample."""
+def compute_vision_cluster_loss_weighted(projectors: nn.ModuleList,
+                                student_vision_hidden_list: List[torch.Tensor], 
+                                teacher_vision_hidden_list: List[torch.Tensor],
+                                original_width: int, original_height: int,
+                                args: Any,
+                                teacher_patch_size: int = 28,
+                                student_patch_size: int = 64,
+                                student_resize: int = 1024) -> Tuple[torch.Tensor, Optional[Dict], Optional[Dict], Optional[Dict], Optional[Dict]]:
+    """Computes weighted vision cluster loss for a single sample."""
     device = student_vision_hidden_list[0].device
     num_teacher_vision_tokens = teacher_vision_hidden_list[0].size(0)
     num_student_vision_tokens = student_vision_hidden_list[0].size(0)
@@ -986,20 +988,20 @@ def compute_vision_cluster_loss_weighted(projectors,
     
     return total_loss, word_cluster_info, word_student_mapping, span_cluster_info, span_student_mapping
 
-def compute_cross_modal_alignment_loss_weighted(projectors,
-                                       student_text_hidden_list,
-                                       teacher_text_hidden_list,
-                                       student_vision_hidden_list,
-                                       teacher_vision_hidden_list,
-                                       teacher_attention_list,
-                                       text_span_info_words,
-                                       text_span_info_spans,
-                                       vision_cluster_info_words,
-                                       vision_cluster_info_spans,
-                                       student_vision_mapping_words,
-                                       student_vision_mapping_spans,
-                                       args):
-    """Tính cross-modal alignment loss cho một sample."""
+def compute_cross_modal_alignment_loss_weighted(projectors: nn.ModuleList,
+                                       student_text_hidden_list: List[torch.Tensor],
+                                       teacher_text_hidden_list: List[torch.Tensor],
+                                       student_vision_hidden_list: List[torch.Tensor],
+                                       teacher_vision_hidden_list: List[torch.Tensor],
+                                       teacher_attention_list: List[torch.Tensor],
+                                       text_span_info_words: Optional[Dict],
+                                       text_span_info_spans: Optional[Dict],
+                                       vision_cluster_info_words: Optional[Dict],
+                                       vision_cluster_info_spans: Optional[Dict],
+                                       student_vision_mapping_words: Optional[Dict],
+                                       student_vision_mapping_spans: Optional[Dict],
+                                       args: Any) -> torch.Tensor:
+    """Computes weighted cross-modal alignment loss for a single sample."""
     device = student_text_hidden_list[0].device
     total_loss = 0.0
     num_valid_layers = 0
@@ -1073,7 +1075,10 @@ def compute_cross_modal_alignment_loss_weighted(projectors,
     return total_loss
                                        
 class SpanProposeCriterionWeighted(nn.Module):
-    def __init__(self, args):
+    """
+    Weighted Criterion for Span Propose, including contrastive loss, span alignment loss, and RKD loss.
+    """
+    def __init__(self, args: Any):
         super(SpanProposeCriterionWeighted, self).__init__()
         
         if dist.is_initialized():
@@ -1110,8 +1115,8 @@ class SpanProposeCriterionWeighted(nn.Module):
         all_tensors = torch.cat(all_tensors, dim=0)
         return all_tensors
     
-    def forward(self, distiller, input_data, tokenizer):
-        # print_rank("Start SpanProposeCriterion forward)
+    def forward(self, distiller: Any, input_data: Dict[str, Any], tokenizer: Any) -> Dict[str, torch.Tensor]:
+        # logger.debug("Start SpanProposeCriterion forward")
         
         self.distiller = distiller
         student_model = distiller.student
@@ -1458,12 +1463,14 @@ class SpanProposeCriterionWeighted(nn.Module):
             'kd_loss_rkd': rkd_loss,
         }
         
-    def pairwise_distance(self, x):
+    def pairwise_distance(self, x: torch.Tensor) -> torch.Tensor:
+        """Computes pairwise Euclidean distance."""
         norm = (x**2).sum(dim=1, keepdim=True)
         dist = norm + norm.t() - 2.0 * torch.mm(x, x.t())
         return dist
     
-    def compute_distance_loss(self, student_qry, student_pos, teacher_qry, teacher_pos):
+    def compute_distance_loss(self, student_qry: torch.Tensor, student_pos: torch.Tensor, teacher_qry: torch.Tensor, teacher_pos: torch.Tensor) -> torch.Tensor:
+        """Computes RKD distance loss."""
         
         student_repr = torch.cat([student_qry, student_pos], dim=0)
         teacher_repr = torch.cat([teacher_qry, teacher_pos], dim=0)
@@ -1490,7 +1497,8 @@ class SpanProposeCriterionWeighted(nn.Module):
         loss = loss.mean()
         return loss
     
-    def angle_potentials(self, x):
+    def angle_potentials(self, x: torch.Tensor) -> torch.Tensor:
+        """Computes angle potentials for RKD angle loss."""
         n = x.size(0)
         diffs = x.unsqueeze(0) - x.unsqueeze(1)
         norms = torch.norm(diffs, dim=-1, keepdim=True) + 1e-8
@@ -1499,7 +1507,8 @@ class SpanProposeCriterionWeighted(nn.Module):
         cos_angles = torch.einsum('ijd,kjd->ijk', e, e)
         return cos_angles
     
-    def compute_angle_loss(self, student_qry, student_pos, teacher_qry, teacher_pos):
+    def compute_angle_loss(self, student_qry: torch.Tensor, student_pos: torch.Tensor, teacher_qry: torch.Tensor, teacher_pos: torch.Tensor) -> torch.Tensor:
+        """Computes RKD angle loss."""
         
         student_repr = torch.cat([student_qry, student_pos], dim=0)
         teacher_repr = torch.cat([teacher_qry, teacher_pos], dim=0)

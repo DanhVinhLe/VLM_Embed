@@ -1,15 +1,38 @@
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
 
+logger = logging.getLogger(__name__)
+
+
 class CKALoss(nn.Module):
-    def __init__(self, eps=1e-8):
+    """
+    Centered Kernel Alignment (CKA) Loss.
+    
+    Measures the similarity between two representations (student and teacher) 
+    invariant to orthogonal transformation and isotropic scaling.
+    """
+
+    def __init__(self, eps: float = 1e-8):
         super().__init__()
         self.eps = eps
 
-    def forward(self, SH, TH):
+    def forward(self, SH: Tensor, TH: Tensor) -> Tensor:
+        """
+        Computes CKA loss.
+
+        Args:
+            SH: Student hidden states.
+            TH: Teacher hidden states.
+
+        Returns:
+            Scalar loss value (1 - CKA).
+        """
         dT = TH.size(-1)
         dS = SH.size(-1)
         SH = SH.view(-1, dS).to(torch.float64)
@@ -25,7 +48,22 @@ class CKALoss(nn.Module):
         return 1 - num / torch.sqrt(den1 * den2)
 
 class EMOLoss(nn.Module):
-    def __init__(self, args):
+    """
+    Earth Mover's Distance based Loss (EMO).
+
+    Combines:
+    1. Contrastive Loss.
+    2. Optimal Transport (OT) Loss (Sinkhorn distance) to align token distributions.
+    3. Attention Loss (CKA) to align attention maps.
+    """
+
+    def __init__(self, args: Any):
+        """
+        Initializes the EMOLoss module.
+
+        Args:
+            args: Configuration arguments.
+        """
         super(EMOLoss, self).__init__()
         self.args = args
         self.kd_loss_weight = self.args.kd_weight
@@ -41,7 +79,16 @@ class EMOLoss(nn.Module):
             self.world_size = 1
             self.process_rank = 0
             
-    def _dist_gather_tensor(self, t: Tensor):
+    def _dist_gather_tensor(self, t: Tensor) -> Tensor:
+        """
+        Gathers tensors from all processes in distributed setting.
+
+        Args:
+            t: Input tensor from current process.
+
+        Returns:
+            Concatenated tensor from all processes.
+        """
         t = t.contiguous()
         all_tensors = [torch.empty_like(t) for _ in range(self.world_size)]
         dist.all_gather(all_tensors, t)
@@ -253,7 +300,7 @@ class EMOLoss(nn.Module):
             pos_topk_idx = [idx for idx, _, _ in topk_results[i]['pos_topk']]
             
             if len(qry_topk_idx) == 0 or len(pos_topk_idx) == 0:
-                print(f"Warning: No top-k tokens found for OT loss computation for instance {i}")
+                logger.warning(f"Warning: No top-k tokens found for OT loss computation for instance {i}")
                 continue
             
             # === Get all text token indices for teacher ===
@@ -271,7 +318,7 @@ class EMOLoss(nn.Module):
             teacher_pos_text_indices = torch.where(teacher_pos_text_mask)[0].tolist()
             
             if len(teacher_qry_text_indices) == 0 or len(teacher_pos_text_indices) == 0:
-                print(f"Warning: No text tokens found for instance {i}")
+                logger.warning(f"Warning: No text tokens found for instance {i}")
                 continue
             
             # === Get all text token indices for student ===
@@ -289,7 +336,7 @@ class EMOLoss(nn.Module):
             student_pos_text_indices = torch.where(student_pos_text_mask)[0].tolist()
             
             if len(student_qry_text_indices) == 0 or len(student_pos_text_indices) == 0:
-                print(f"Warning: No text tokens found for student instance {i}")
+                logger.warning(f"Warning: No text tokens found for student instance {i}")
                 continue
             
             # === Compute importance mass for Query (using top-k) ===
@@ -458,7 +505,7 @@ class EMOLoss(nn.Module):
             pos_topk_idx = [idx for idx, _, _ in topk_results[i]['pos_topk']]
             
             if len(qry_topk_idx) == 0 or len(pos_topk_idx) == 0:
-                print("Warning: No valid top-k tokens found for instance {}, skipping attention loss computation.".format(i))
+                logger.warning(f"Warning: No valid top-k tokens found for instance {i}, skipping attention loss computation.")
                 continue
             
             s_qry_topk_idx = [idx for idx in student_idx[i]['qry'] if idx < student_last_k_qry[0].size(2)]
