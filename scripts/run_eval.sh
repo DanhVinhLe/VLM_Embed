@@ -30,24 +30,48 @@ else
     IFS=' ' read -r -a SUBSETS <<< "$SUBSET"
 fi
 
-# Run Evaluation
-# Using python directly instead of run_inf.sh wrapper for clarity and control
-python3 eval_mmeb.py \
-    --model_name "$MODEL_PATH" \
-    --encode_output_path "$OUTPUT_DIR" \
-    --dataset_name "TIGER-Lab/MMEB-eval" \
-    --subset_name "${SUBSETS[@]}" \
-    --dataset_split "test" \
-    --per_device_eval_batch_size 16 \
-    --image_dir "eval_images/" \
-    --pooling "eos" \
-    --model_backbone "llava_qwen2" \
-    --normalize True \
-    --bf16 \
-    --tgt_prefix_mod \
-    --lora \
-    --lora_r 64 \
-    --lora_alpha 64
+# Detect number of GPUs
+NUM_GPUS=8
+echo "Detected $NUM_GPUS GPU(s)"
+
+# Run Evaluation with Accelerate for multi-GPU support
+if [ "$NUM_GPUS" -gt 1 ]; then
+    echo "Using multi-GPU mode with accelerate"
+    accelerate launch --multi_gpu --num_processes="$NUM_GPUS" eval_mmeb.py \
+        --model_name "$MODEL_PATH" \
+        --encode_output_path "$OUTPUT_DIR" \
+        --dataset_name "TIGER-Lab/MMEB-eval" \
+        --subset_name "${SUBSETS[@]}" \
+        --dataset_split "test" \
+        --per_device_eval_batch_size 16 \
+        --image_dir "eval_images/" \
+        --pooling "eos" \
+        --model_backbone "llava_qwen2" \
+        --normalize True \
+        --bf16 \
+        --tgt_prefix_mod 
+        # --lora \
+        # --lora_r 64 \
+        # --lora_alpha 64
+else
+    echo "Using single GPU mode"
+    python3 eval_mmeb.py \
+        --model_name "$MODEL_PATH" \
+        --encode_output_path "$OUTPUT_DIR" \
+        --dataset_name "TIGER-Lab/MMEB-eval" \
+        --subset_name "${SUBSETS[@]}" \
+        --dataset_split "test" \
+        --per_device_eval_batch_size 16 \
+        --image_dir "eval_images/" \
+        --pooling "eos" \
+        --model_backbone "llava_qwen2" \
+        --normalize True \
+        --bf16 \
+        --tgt_prefix_mod 
+        # --lora \
+        # --lora_r 64 \
+        # --lora_alpha 64
+fi
 
 echo "========================================================="
 echo "Evaluation Completed"
