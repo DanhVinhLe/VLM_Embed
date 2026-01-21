@@ -107,7 +107,10 @@ def process_image(image: Image.Image, resolution: str, max_dim: int = 1344) -> O
 
     # Resize if larger than target_max to avoid unnecessary downscaling if already small
     if max_side > target_max:
-        image = image.resize((target_max, target_max))
+        scale = target_max / max_side
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        image = image.resize((new_width, new_height))
 
     return image
 
@@ -130,13 +133,13 @@ def create_semi_orthogonal_matrix(tensor: torch.Tensor) -> torch.Tensor:
     if rows >= cols:
         # Direct QR decomposition
         # We generate a random Gaussian matrix and orthogonalize its columns.
-        a = torch.randn(rows, cols, dtype=tensor.dtype)
+        a = torch.randn(rows, cols, device=tensor.device, dtype=tensor.dtype)
         q, _ = torch.linalg.qr(a, mode='reduced')
         tensor.data[:] = q[:, :cols]
     else:
         # QR on transposed matrix to ensure W W^T = I
         # If output dim < input dim, we want rows to be orthogonal.
-        a = torch.randn(cols, rows, dtype=tensor.dtype)
+        a = torch.randn(cols, rows, device=tensor.device, dtype=tensor.dtype)
         q, _ = torch.linalg.qr(a, mode='reduced')
         tensor.data[:] = q.T[:rows, :]
     return tensor
@@ -174,6 +177,9 @@ class Distiller(nn.Module):
         # Setup projection layers to map student space to teacher space
         self.set_projector()
         logger.info("Projectors set.")
+
+        # Initialize specialized projectors conditionally based on the loss type
+        self._init_specialized_projectors()
 
     def _create_model_args(self, model_type: str = 'teacher') -> ModelArguments:
         """
@@ -226,6 +232,61 @@ class Distiller(nn.Module):
         logger.info("Teacher model loaded.")
         return teacher
 
+    def _init_specialized_projectors(self) -> None:
+        """
+        Conditionally initializes specialized projectors based on the loss type.
+        This avoids unnecessary memory allocation for unused projectors.
+        """
+        kd_loss_type = self.training_args.kd_loss_type
+
+        # For image alignment (used in various image-based distillation methods)
+        if 'img_align' in kd_loss_type or 'image' in kd_loss_type:
+            self.t2s_img_align = nn.Sequential(
+                nn.Linear(self.teacher_hidden_dim, self.student_hidden_dim),
+                nn.ReLU()
+            ).to(dtype=torch.bfloat16)
+            logger.info("Initialized t2s_img_align projector")
+
+        # For simple KD focusing on last layer
+        if kd_loss_type in ['kd', 'simple_kd', 'logit_kd', 'universal_logit_distillation']:
+            self.last_layer_projector = nn.Sequential(
+                nn.Linear(self.teacher_hidden_dim, self.student_hidden_dim),
+                nn.ReLU()
+            ).to(dtype=torch.bfloat16)
+            logger.info("Initialized last_layer_projector")
+
+        # For Soft-DTW (Dynamic Time Warping)
+        if 'dtw' in kd_loss_type.lower():
+            self.num_chosen_hidden_states = 3
+            self.t2s_dtw = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(self.teacher_hidden_dim, self.student_hidden_dim),
+                    nn.ReLU()
+                )
+                for _ in range(self.num_chosen_hidden_states)
+            ]).to(dtype=torch.bfloat16)
+            logger.info(f"Initialized t2s_dtw with {self.num_chosen_hidden_states} projectors")
+
+        # For CKD (Cross-layer Knowledge Distillation)
+        if kd_loss_type in ['ckd', 'cross_layer_kd']:
+            self.t2s_ckd = nn.Sequential(
+                nn.Linear(self.teacher_hidden_dim, self.student_hidden_dim),
+                nn.ReLU()
+            ).to(dtype=torch.bfloat16)
+            logger.info("Initialized t2s_ckd projector")
+        if 'holo' in kd_loss_type:
+            self.holo_projector = nn.Linear(
+                self.student_hidden_dim, 
+                self.teacher_hidden_dim, 
+                bias=False
+            )
+            # Use semi-orthogonal init to preserve the student's internal topology 
+            # as much as possible during the projection.
+            create_semi_orthogonal_matrix(self.holo_projector.weight)
+            self.holo_projector = self.holo_projector.to(dtype=torch.bfloat16)
+            logger.info("Initialized holo_projector (Student -> Teacher) for HoloDistill")
+        # -------------------------
+
     def get_student_processor(self) -> ProcessorMixin:
         """
         Gets the processor needed to prepare inputs for the student model.
@@ -258,7 +319,8 @@ class Distiller(nn.Module):
             The calculated scalar loss tensor.
         """
         if self.training_args.kd_loss_type in [
-            'span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase'
+            'span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase',
+            'span_propose_wo_hid_cross', 'span_propose_wo_hid_intra', 'span_propose_wo_intra_cross'
         ]:
             loss = criterion(self, batch, tokenizer=self.tokenizer)
         else:

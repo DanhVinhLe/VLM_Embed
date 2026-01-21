@@ -8,6 +8,8 @@ from .em_kd_llava_ov import EMKDLLavaLoss
 from .span_propose import SpanProposeCriterion
 from .span_propose_attn import SpanProposeCriterionWeighted
 from .span_propose_attn_only_phrase import SpanProposeCriterionWeightedOnlyPhrase
+from .ckd import CKD
+from .holo import HoloDistillLoss
 
 criterion_list = {
     "contrastive_rkd": ContrastiveLossWithRKD,
@@ -20,6 +22,8 @@ criterion_list = {
     "span_propose": SpanProposeCriterion,
     "span_propose_attn": SpanProposeCriterionWeighted,
     "span_propose_attn_only_phrase": SpanProposeCriterionWeightedOnlyPhrase,
+    "ckd": CKD,
+    "holo": HoloDistillLoss
 }
 
 def build_criterion(args):
