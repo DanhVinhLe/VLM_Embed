@@ -41,7 +41,7 @@ class CKDLoss(nn.Module):
         total_loss = contrastive_loss + self.kd_loss_weight * distance_loss
 
         return {
-            "total_loss": total_loss,
+            "loss": total_loss,
             "contrastive_loss": contrastive_loss,
             "kd_loss": distance_loss,
         }
@@ -67,7 +67,6 @@ class CKDLoss(nn.Module):
     def compute_distance_loss(self, student_qry, teacher_qry):
 
         student_repr = student_qry
-        teacher_repr = self.distiller.t2s_ckd(teacher_qry)
+        teacher_repr = self.distiller.projectors["t2s"](teacher_qry)
         loss = self.compute_mse(student_repr, teacher_repr)
-        
         return loss
