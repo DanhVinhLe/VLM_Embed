@@ -10,3 +10,5 @@ logs/
 wandb/
 *.log
 eval_outputs/
+eval_images/
+models/

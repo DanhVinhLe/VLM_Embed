@@ -7,4 +7,5 @@ docker run -it --ipc=host --network=host --group-add render \
         -w /workspace/VLM_Embed \
         -v /home/tran/.ssh:/root/.ssh \
         --name anhtt-exaone-dev \
-        rocm/pytorch:rocm7.0.2_ubuntu22.04_py3.10_pytorch_release_2.7.1 bash
+        moreh-vllm:anhtt-dev bash
+        # rocm/pytorch:rocm7.0.2_ubuntu22.04_py3.10_pytorch_release_2.7.1 bash

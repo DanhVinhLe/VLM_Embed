@@ -1,9 +1,11 @@
+from torch import nn
 from .contrastive_loss_with_RKD import ContrastiveLossWithRKD
 from .proposal_loss_with_DTW import ProposalLossWithDTW
 from .universal_logit_distillation import UniversalLogitDistillation
 from .propose_with_proj import ProposalLossWithProj
 from .emo_loss import EMOLoss
 from .em_kd import EMKDLoss
+from .ckd import CKDLoss
 from .em_kd_llava_ov import EMKDLLavaLoss
 from .span_propose import SpanProposeCriterion
 from .span_propose_attn import SpanProposeCriterionWeighted
@@ -20,6 +22,8 @@ criterion_list = {
     "span_propose": SpanProposeCriterion,
     "span_propose_attn": SpanProposeCriterionWeighted,
     "span_propose_attn_only_phrase": SpanProposeCriterionWeightedOnlyPhrase,
+    "ckd": CKDLoss,
+    "mse": nn.MSELoss,
 }
 
 def build_criterion(args):

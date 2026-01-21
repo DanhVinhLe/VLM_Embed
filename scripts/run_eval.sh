@@ -5,12 +5,10 @@
 # Usage: ./scripts/run_eval.sh [MODEL_PATH] [OUTPUT_DIR] [SUBSET_NAME]
 # Example: ./scripts/run_eval.sh training/RKD/checkpoint-final eval_outputs/RKD ImageNet_1K
 # =========================================================================
-
-# MODEL_PATH=${1:-"training/RKD/checkpoint-final"}
-# OUTPUT_DIR=${2:-"eval_outputs/RKD"}
-# SUBSET=${3:-"ImageNet-1K"}  # Default to ImageNet_1K, or pass "all" or list
-MODEL_PATH="apple/FastVLM-0.5B"
-OUTPUT_DIR=eval_outputs/student-base/full
+# Experiment configurations
+EXP_NAME="EMKD_ImageNet_1K_bs32"
+MODEL_PATH="training/$EXP_NAME/checkpoint-final"
+OUTPUT_DIR=eval_outputs/$EXP_NAME
 SUBSET="ImageNet-1K N24News HatefulMemes VOC2007 SUN397"
 # Absolute paths
 REPO_ROOT=$(pwd)

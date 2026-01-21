@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F
 
-class CKD(nn.Module):
+class CKDLoss(nn.Module):
     def __init__(self, args):
-        super(CKD, self).__init__()
+        super(CKDLoss, self).__init__()
         self.args = args
         self.kd_loss_weight = 0.3
         self.distance_weight = 0.5
@@ -41,7 +41,7 @@ class CKD(nn.Module):
         total_loss = contrastive_loss + self.kd_loss_weight * distance_loss
 
         return {
-            "total_loss": total_loss,
+            "loss": total_loss,
             "contrastive_loss": contrastive_loss,
             "kd_loss": distance_loss,
         }
@@ -67,7 +67,6 @@ class CKD(nn.Module):
     def compute_distance_loss(self, student_qry, teacher_qry):
 
         student_repr = student_qry
-        teacher_repr = self.distiller.t2s_ckd(teacher_qry)
+        teacher_repr = self.distiller.projectors["t2s"](teacher_qry)
         loss = self.compute_mse(student_repr, teacher_repr)
-        
         return loss

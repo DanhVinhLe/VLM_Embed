@@ -164,8 +164,8 @@ def main():
     parser.add_argument(
         '--output',
         type=str,
-        default='eval_results.csv',
-        help='Path to output CSV file (default: eval_results.csv)'
+        default='eval_outputs/eval_results.csv',
+        help='Path to output CSV file (default: eval_outputs/eval_results.csv)'
     )
     parser.add_argument(
         '--verbose',
