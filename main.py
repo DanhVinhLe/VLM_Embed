@@ -7,15 +7,14 @@ import time
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
-# --- FIX 1: Tắt đa luồng Tokenizer/OMP để tránh Deadlock ---
-# Phải đặt trước khi import torch hoặc transformers
+# --- FIX 1: Disable Tokenizer Parallelism/OMP to prevent Deadlock ---
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["OMP_NUM_THREADS"] = "1"
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, random_split, SequentialSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 
@@ -34,14 +33,12 @@ from src.arguments import DataArguments, ModelArguments, TrainingArguments
 from src.utils import print_rank, print_master
 from src.criterions import build_criterion
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
+# ... [Keep setup_logging, ddp_setup, cleanup_ddp, is_main_process, to_device, download_artifacts unchanged] ...
 def setup_logging(training_args: TrainingArguments) -> None:
     """Configures logging for the training process."""
-    # Log INFO cho tất cả rank lúc khởi tạo để debug việc bị treo
     log_level = logging.INFO
-    
     logging.basicConfig(
         format=f"[Rank {training_args.local_rank}] %(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
@@ -49,35 +46,27 @@ def setup_logging(training_args: TrainingArguments) -> None:
         handlers=[logging.StreamHandler(sys.stdout)],
     )
     logger.setLevel(log_level)
-    
-    # Set transformers verbosity
     import transformers
     if training_args.local_rank in [-1, 0]:
         transformers.utils.logging.set_verbosity_info()
     else:
-        # Sau khi init xong có thể giảm bớt log của slave rank nếu muốn
         transformers.utils.logging.set_verbosity_error()
-        
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
 
 def ddp_setup() -> None:
-    """Initializes distributed data parallel group."""
     if not dist.is_initialized() and "LOCAL_RANK" in os.environ:
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         dist.init_process_group(backend="nccl", timeout=timedelta(minutes=60))
 
 def cleanup_ddp() -> None:
-    """Cleans up distributed process group."""
     if dist.is_initialized():
         dist.destroy_process_group()
 
 def is_main_process() -> bool:
-    """Checks if the current process is the main process (rank 0)."""
     return not dist.is_initialized() or dist.get_rank() == 0
 
 def to_device(obj, device):
-    """Recursively moves tensors in obj to the specified device."""
     if obj is None:
         return None
     elif isinstance(obj, torch.Tensor):
@@ -92,46 +81,40 @@ def to_device(obj, device):
     return obj
 
 def download_artifacts(model_args: ModelArguments):
-    """
-    Hàm hỗ trợ tải trước artifacts trên Rank 0 để đưa vào cache.
-    Tránh lỗi 404/Connection Refused khi nhiều GPU cùng gọi API.
-    """
     logger.info("  [Pre-load] Starting artifact download...")
     if model_args.model_name:
         try:
-            logger.info(f"  [Pre-load] Downloading Config for {model_args.model_name}")
             AutoConfig.from_pretrained(model_args.model_name)
-            
-            logger.info(f"  [Pre-load] Downloading Tokenizer for {model_args.model_name}")
             AutoTokenizer.from_pretrained(model_args.model_name)
-            
-            logger.info(f"  [Pre-load] Downloading Processor for {model_args.model_name}")
             AutoProcessor.from_pretrained(model_args.model_name)
         except Exception as e:
             logger.warning(f"  [Pre-load] Warning: Some artifacts failed to pre-download: {e}")
-            # Không crash ở đây, để code chính tự xử lý sau
     logger.info("  [Pre-load] Finished.")
 
+# --- CHANGED: Updated save_checkpoint to handle specific folder names (for best model) ---
 def save_checkpoint(
     output_dir: str,
     epoch: int,
     distiller: nn.Module,
     model_args: ModelArguments,
     step: Optional[int] = None,
-    is_final: bool = False,
+    folder_name: Optional[str] = None,
 ) -> None:
-    """Saves model checkpoint."""
+    """Saves model checkpoint. Supports custom folder name for best model."""
     if not is_main_process():
         return
 
-    ckpt_dir = os.path.join(output_dir, "checkpoint-final" if is_final else f"checkpoint-epoch-{epoch}")
-    if step is not None and not is_final:
+    if folder_name:
+        ckpt_dir = os.path.join(output_dir, folder_name)
+    elif step is not None:
          ckpt_dir = os.path.join(output_dir, f"checkpoint-step-{step}")
+    else:
+        ckpt_dir = os.path.join(output_dir, f"checkpoint-epoch-{epoch}")
          
     os.makedirs(ckpt_dir, exist_ok=True)
     logger.info(f"Saving checkpoint to {ckpt_dir}...")
 
-    # Unwrap DDP model if necessary
+    # Unwrap DDP model
     model_to_save = distiller.module if hasattr(distiller, "module") else distiller
     student = model_to_save.student
     
@@ -140,7 +123,6 @@ def save_checkpoint(
         student.save_pretrained(ckpt_dir)
         logger.info("Saved LoRA adapter model.")
     else:
-        # Check structure safely
         if hasattr(student, "encoder"):
             student.encoder.save_pretrained(ckpt_dir)
         else:
@@ -155,7 +137,6 @@ def save_checkpoint(
     try:
         projector_weights = None
         if hasattr(student, "encoder") and hasattr(student.encoder, "model"):
-             # Common structures
              if hasattr(student.encoder.model, "multi_modal_projector"):
                  projector_weights = student.encoder.model.multi_modal_projector.state_dict()
              elif hasattr(student.encoder.model, "model") and hasattr(student.encoder.model.model, "mm_projector"):
@@ -163,32 +144,56 @@ def save_checkpoint(
         
         if projector_weights is not None:
             torch.save(projector_weights, projector_dir)
-            logger.info(f"Saved projector weights to {projector_dir}")
-        else:
-             # Just a warning, not an error
-             logger.warning("Could not locate projector weights in standard paths, skipping explicit projector save.")
-    except AttributeError as e:
-        logger.warning(f"Could not find mm_projector to save separate weights: {e}")
+    except AttributeError:
+        pass
 
     # Save tokenizer and config
     try:
         if model_args.model_name:
-            tokenizer = AutoTokenizer.from_pretrained(model_args.model_name)
-            tokenizer.save_pretrained(ckpt_dir)
-            
-            config = AutoConfig.from_pretrained(model_args.model_name)
-            config.save_pretrained(ckpt_dir)
-            
+            AutoTokenizer.from_pretrained(model_args.model_name).save_pretrained(ckpt_dir)
+            AutoConfig.from_pretrained(model_args.model_name).save_pretrained(ckpt_dir)
             try:
-                processor = AutoProcessor.from_pretrained(model_args.model_name)
-                processor.save_pretrained(ckpt_dir)
+                AutoProcessor.from_pretrained(model_args.model_name).save_pretrained(ckpt_dir)
             except Exception:
-                logger.warning("Could not save processor.")
-    except Exception as e:
-        logger.warning(f"Error saving config/tokenizer: {e}")
+                pass
+    except Exception:
+        pass
+
+# --- NEW FUNCTION: Evaluate Loss ---
+def evaluate_loss(
+    model: nn.Module, 
+    dataloader: DataLoader, 
+    criterion: nn.Module, 
+    device: torch.device
+) -> float:
+    """Computes average loss on the validation set."""
+    model.eval()
+    total_loss = 0.0
+    num_batches = 0
+    
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Evaluating", disable=not is_main_process()):
+            batch = to_device(batch, device)
+            outputs = model(criterion, batch)
+            
+            # Extract loss
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs
+            total_loss += loss.item()
+            num_batches += 1
+            
+    # Calculate average on this device
+    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    
+    # If distributed, average across all GPUs
+    if dist.is_initialized():
+        avg_loss_tensor = torch.tensor(avg_loss, device=device)
+        dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.SUM)
+        avg_loss = avg_loss_tensor.item() / dist.get_world_size()
+        
+    model.train() # Switch back to train mode
+    return avg_loss
 
 def main():
-    # Setup DDP first
     ddp_setup()
 
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
@@ -199,10 +204,6 @@ def main():
 
     setup_logging(training_args)
     
-    logger.info(f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}, "
-                f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16 or training_args.bf16}")
-
-    # Initialize WandB
     if is_main_process() and "wandb" in training_args.report_to:
         wandb.init(
             project=os.getenv("WANDB_PROJECT", "vlm_distillation"),
@@ -214,38 +215,48 @@ def main():
             }
         )
 
-    # --- FIX 2: ĐỒNG BỘ HÓA TẢI FILE ---
+    # Artifact Sync
     logger.info("Handling artifact downloading...")
-    
-    # Logic: Rank 0 tải trước -> Barrier -> Mọi người cùng load từ cache
     if dist.is_initialized():
         if is_main_process():
-            logger.info("Rank 0: Pre-downloading artifacts to cache to prevent races...")
             download_artifacts(model_args)
-            logger.info("Rank 0: Download complete. Releasing barrier.")
-        
-        # Tất cả GPU chờ Rank 0
         dist.barrier()
-        logger.info(f"Rank {training_args.local_rank}: Barrier passed. Cache should be ready.")
     else:
-        # Chạy đơn lẻ
         download_artifacts(model_args)
 
-    # Prepare Data
+    # --- CHANGED: Dataset Splitting Logic ---
     logger.info("Preparing dataset...")
-    train_dataset = DistillationDataset(data_args, model_args)
+    full_dataset = DistillationDataset(data_args, model_args)
     
-    if dist.is_initialized():
-        sampler = DistributedSampler(train_dataset, shuffle=True)
+    train_dataset = full_dataset
+    eval_dataset = None
+    
+    if data_args.val_split_ratio > 0:
+        val_size = int(len(full_dataset) * data_args.val_split_ratio)
+        train_size = len(full_dataset) - val_size
+        logger.info(f"Splitting dataset: {train_size} training, {val_size} validation.")
+        
+        # Use a fixed generator for reproducibility across ranks
+        generator = torch.Generator().manual_seed(42)
+        train_dataset, eval_dataset = random_split(full_dataset, [train_size, val_size], generator=generator)
     else:
-        sampler = None
+        logger.info("No validation split ratio provided. Using full dataset for training.")
 
-    # Load Model (Distiller)
+    # Samplers
+    if dist.is_initialized():
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        # For eval, we don't necessarily need to shuffle, but we need DistributedSampler 
+        # to split data across GPUs to speed up eval
+        eval_sampler = DistributedSampler(eval_dataset, shuffle=False) if eval_dataset else None
+    else:
+        train_sampler = None
+        eval_sampler = SequentialSampler(eval_dataset) if eval_dataset else None
+
+    # Load Model
     logger.info("Loading Distiller model...")
-    # Lúc này an toàn để load song song
     distiller = Distiller(model_args, training_args)
 
-    # Prepare Collator
+    # Collator
     collator = DistillationCollator(
         student_processor=distiller.get_student_processor(),
         teacher_processor=distiller.get_teacher_processor(),
@@ -254,39 +265,45 @@ def main():
         training_args=training_args,
     )
 
-    # DataLoader
+    # DataLoaders
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=training_args.per_device_train_batch_size,
-        sampler=sampler,
-        shuffle=(sampler is None),
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),
         collate_fn=collator,
         drop_last=True,
         num_workers=training_args.dataloader_num_workers,
         pin_memory=True,
     )
-
-    # Optimizer
-    logger.info("Setting up optimizer...")
     
+    eval_dataloader = None
+    if eval_dataset:
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=training_args.per_device_eval_batch_size or training_args.per_device_train_batch_size,
+            sampler=eval_sampler,
+            shuffle=False,
+            collate_fn=collator,
+            drop_last=False,
+            num_workers=training_args.dataloader_num_workers,
+            pin_memory=True
+        )
+
+    # Optimizer setup
+    logger.info("Setting up optimizer...")
     trainable_params = []
-    num_trainable = 0
     
     model_to_optimize = distiller.module if hasattr(distiller, "module") else distiller
     for n, p in model_to_optimize.student.named_parameters():
         if "mm_projector" in n or "multi_modal_projector" in n:
              p.requires_grad = True
-        
         if "lm_head" in n:
              p.requires_grad = False
-             
         if p.requires_grad:
             if training_args.bf16:
                  p.data = p.data.to(torch.bfloat16)
             trainable_params.append(p)
-            num_trainable += p.numel()
-            
-    logger.info(f"Number of trainable parameters: {num_trainable}")
 
     optimizer = AdamW(
         trainable_params,
@@ -300,13 +317,12 @@ def main():
          if hasattr(distiller, "add_optimizer_param_group"):
             optimizer = distiller.add_optimizer_param_group(optimizer)
 
-    # Move model to device
+    # Move to device and wrap DDP
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if dist.is_initialized():
         device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
     
     distiller = distiller.to(device)
-    
     if dist.is_initialized():
         distiller = DDP(distiller, device_ids=[int(os.environ["LOCAL_RANK"])], find_unused_parameters=True)
 
@@ -321,20 +337,20 @@ def main():
         num_training_steps=max_train_steps,
     )
 
-    # Criterion
-    criterion = build_criterion(training_args)
-    criterion = criterion.to(device)
+    criterion = build_criterion(training_args).to(device)
 
-    # Training Loop
+    # Training Stats
     if is_main_process():
         logger.info("***** Running training *****")
         logger.info(f"  Num examples = {len(train_dataset)}")
+        logger.info(f"  Num Eval examples = {len(eval_dataset) if eval_dataset else 0}")
         logger.info(f"  Num Epochs = {training_args.num_train_epochs}")
         logger.info(f"  Gradient Accumulation steps = {training_args.gradient_accumulation_steps}")
         logger.info(f"  Total optimization steps = {max_train_steps}")
+        logger.info(f"  Eval step = {training_args.eval_steps}")
 
     global_step = 0
-    start_time = time.time()
+    best_val_loss = float('inf') # Track best loss
 
     for epoch in range(int(training_args.num_train_epochs)):
         if dist.is_initialized():
@@ -343,18 +359,12 @@ def main():
         distiller.train()
         epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", disable=not is_main_process())
         
-        accumulated_loss = 0.0
-        
         for step, batch in enumerate(epoch_iterator):
             batch = to_device(batch, device)
             
-            # Forward pass
             outputs = distiller(criterion, batch)
-            
             loss = outputs["loss"] / training_args.gradient_accumulation_steps
             loss.backward()
-            
-            accumulated_loss += loss.item()
 
             if (step + 1) % training_args.gradient_accumulation_steps == 0:
                 if training_args.max_grad_norm is not None and training_args.max_grad_norm > 0:
@@ -363,7 +373,6 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
-                
                 global_step += 1
                 
                 # Logging
@@ -379,19 +388,43 @@ def main():
 
                     if "wandb" in training_args.report_to:
                         wandb.log(metrics, step=global_step)
-                    
                     epoch_iterator.set_postfix(**{k.replace("train/", ""): f"{v:.4f}" for k, v in metrics.items() if "loss" in k})
 
-        # Save checkpoint at end of epoch
+                # --- CHANGED: Periodic Evaluation & Best Model Saving ---
+                if eval_dataloader is not None and training_args.eval_steps > 0 and global_step % training_args.eval_steps == 0:
+                    logger.info(f"Step {global_step}: Running evaluation...")
+                    val_loss = evaluate_loss(distiller, eval_dataloader, criterion, device)
+                    
+                    if is_main_process():
+                        logger.info(f"Step {global_step} | Validation Loss: {val_loss:.4f}")
+                        if "wandb" in training_args.report_to:
+                            wandb.log({"eval/loss": val_loss}, step=global_step)
+                        
+                        # Save Best Model
+                        if val_loss < best_val_loss:
+                            logger.info(f"New best model found! (Loss: {val_loss:.4f} < {best_val_loss:.4f})")
+                            best_val_loss = val_loss
+                            save_checkpoint(
+                                training_args.output_dir, 
+                                epoch=epoch+1, 
+                                distiller=distiller, 
+                                model_args=model_args, 
+                                step=global_step, 
+                                folder_name="checkpoint-best"
+                            )
+
+        # End of epoch Saving
         save_checkpoint(training_args.output_dir, epoch + 1, distiller, model_args)
         
         if dist.is_initialized():
             dist.barrier()
 
     logger.info("Training completed.")
-    
+    if is_main_process() and eval_dataloader:
+        logger.info(f"Best Validation Loss: {best_val_loss:.4f}")
+
     # Final Save
-    save_checkpoint(training_args.output_dir, training_args.num_train_epochs, distiller, model_args, is_final=True)
+    save_checkpoint(training_args.output_dir, int(training_args.num_train_epochs), distiller, model_args, folder_name="checkpoint-final")
     
     if is_main_process() and "wandb" in training_args.report_to:
         wandb.finish()

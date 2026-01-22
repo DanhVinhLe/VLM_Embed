@@ -8,14 +8,12 @@ logger = logging.getLogger(__name__)
 
 class HoloDistillLoss(nn.Module):
     """
-    HoloDistill: Holographic Knowledge Distillation via Fused Gromov-Wasserstein 
-    and Matryoshka Representation Learning.
-
-    Implements the ICML plan:
-    1. Treats models as Metric Measure Spaces (mm-spaces).
-    2. Aligns structures via Fused Gromov-Wasserstein (FGW) Optimal Transport.
-    3. Incorporates Saliency-Aware Probability Measures.
-    4. Supports Elastic Saliency Compression (Matryoshka).
+    HoloDistill + Global RKD (Hybrid Geometry).
+    
+    1. Global Scope: RKD (Distance + Angle) on [CLS]/Pooled embeddings.
+       - Ensures global class separability (Fixes ImageNet).
+    2. Local Scope: Fused Gromov-Wasserstein (FGW) on Token Hidden States.
+       - Ensures dense structural understanding (Preserves VOC dominance).
     """
 
     def __init__(self, args: Any):
@@ -23,267 +21,219 @@ class HoloDistillLoss(nn.Module):
         self.args = args
         self.temperature = getattr(args, "temperature", 0.07)
         
-        # Hyperparameters for HoloDistill
-        self.alpha = getattr(args, "holo_alpha", 0.5)      # Balance between Feature Cost and Structure Cost
-        self.ot_epsilon = getattr(args, "ot_epsilon", 0.1) # Entropy regularization for Sinkhorn
-        self.ot_iters = getattr(args, "ot_iters", 20)      # Number of Sinkhorn iterations
-        self.kd_weight = getattr(args, "kd_weight", 1.0)
+        # --- Holo/FGW Hyperparameters ---
+        self.alpha = getattr(args, "holo_alpha", 0.5)
+        self.ot_epsilon = getattr(args, "ot_epsilon", 0.1)
+        self.ot_iters = getattr(args, "ot_iters", 20)
+        self.holo_weight = getattr(args, "holo_weight", 1.0) # Weight for Token-level FGW
         
-        # Matryoshka Representation Learning (MRL) Config
-        # We enforce structure at these embedding slices (e.g., [64, 128, 768])
-        # If not provided, defaults to just the full dimension.
-        self.matryoshka_dims = getattr(args, "matryoshka_dims", [None]) 
-        
-        # Weights for different matryoshka granularities (usually higher for smaller dims)
-        self.matryoshka_weights = getattr(args, "matryoshka_weights", [1.0] * len(self.matryoshka_dims))
+        # --- RKD Hyperparameters (From Baseline) ---
+        self.rkd_distance_weight = getattr(args, "rkd_distance_weight", 1.0)
+        self.rkd_angle_weight = getattr(args, "rkd_angle_weight", 2.0)
+        self.global_rkd_weight = getattr(args, "global_rkd_weight", 10.0) # Weight for Global RKD
 
+        # Matryoshka Config
+        self.matryoshka_dims = getattr(args, "matryoshka_dims", [128, 768]) 
+        self.matryoshka_weights = getattr(args, "matryoshka_weights", [1.0, 2.0])
+
+    # ==========================
+    # Part 1: RKD Modules (Global)
+    # ==========================
+    def pairwise_distance(self, x: torch.Tensor) -> torch.Tensor:
+        """Computes pairwise Euclidean distances."""
+        norm = (x**2).sum(dim=1, keepdim=True)
+        dist = norm + norm.t() - 2.0 * torch.mm(x, x.t())
+        return dist
+
+    def compute_rkd_distance_loss(self, s: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """RKD Distance Loss (Huber-like)."""
+        dist_s = self.pairwise_distance(s)
+        dist_t = self.pairwise_distance(t)
+
+        # Upper triangle only
+        mask = torch.triu(torch.ones_like(dist_s), diagonal=1).bool()
+        dist_s = dist_s[mask]
+        dist_t = dist_t[mask]
+
+        # Normalization (Crucial for stability)
+        mean_s = dist_s.mean().detach() + 1e-8
+        mean_t = dist_t.mean().detach() + 1e-8
+        dist_s = dist_s / mean_s
+        dist_t = dist_t / mean_t
+
+        diff = dist_s - dist_t
+        abs_diff = torch.abs(diff)
+        # Huber loss
+        loss = torch.where(abs_diff < 1.0, 0.5 * (abs_diff ** 2), abs_diff - 0.5)
+        return loss.mean()
+
+    def angle_potentials(self, x: torch.Tensor) -> torch.Tensor:
+        """Computes cosine angles between triplets."""
+        # diffs[i, j, :] = x[i] - x[j]
+        diffs = x.unsqueeze(0) - x.unsqueeze(1)
+        norms = torch.norm(diffs, dim=-1, keepdim=True) + 1e-8
+        e = diffs / norms
+        # cos_angles[i, j, k] = e[i, j] . e[i, k]
+        cos_angles = torch.einsum('ijd,kjd->ijk', e, e)
+        return cos_angles
+
+    def compute_rkd_angle_loss(self, s: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """RKD Angle Loss."""
+        # Often too heavy for full batch, can sample if OOM
+        psi_s = self.angle_potentials(s)
+        psi_t = self.angle_potentials(t)
+
+        n = psi_s.size(0)
+        # Mask distinct i,j,k
+        mask = torch.ones((n, n, n), dtype=torch.bool, device=s.device)
+        idx = torch.arange(n, device=s.device)
+        mask[idx, idx, :] = 0
+        mask[idx, :, idx] = 0
+        mask[:, idx, idx] = 0
+
+        psi_s = psi_s[mask]
+        psi_t = psi_t[mask]
+
+        diff = psi_s - psi_t
+        abs_diff = torch.abs(diff)
+        loss = torch.where(abs_diff < 1.0, 0.5 * (abs_diff ** 2), abs_diff - 0.5)
+        return loss.mean()
+
+    # ==========================
+    # Part 2: Holo/FGW Modules (Local)
+    # ==========================
     def get_saliency_measure(self, hidden_states: torch.Tensor, temp: float = 1.0) -> torch.Tensor:
-        """
-        Computes Saliency-Aware Probability Measures (\mu).
-        
-        Instead of assuming uniform probability over tokens (1/N), we weight tokens 
-        by their information density. We use the L2-norm of the hidden states as a 
-        proxy for saliency, which correlates with attention significance in Transformers.
-        
-        Args:
-            hidden_states: (B, N, D)
-        Returns:
-            mu: (B, N, 1) Normalized probability mass per token.
-        """
-        # Calculate L2 norm as proxy for significance
-        # Shape: (B, N)
         norms = torch.norm(hidden_states, p=2, dim=-1)
-        
-        # Softmax to create a valid probability distribution
         weights = F.softmax(norms / temp, dim=-1)
-        
-        return weights.unsqueeze(-1) # (B, N, 1)
+        return weights.unsqueeze(-1)
 
     def compute_structure_matrix(self, z: torch.Tensor) -> torch.Tensor:
-        """
-        Computes the Intra-Relational Holographic Structure Matrix (C).
-        C_ij = 1 - CosineSimilarity(z_i, z_j)
-        
-        Args:
-            z: (B, N, D)
-        Returns:
-            C: (B, N, N) Distance matrix
-        """
-        # Normalize for cosine similarity
         z_norm = F.normalize(z, p=2, dim=-1)
-        
-        # Cosine similarity: (B, N, D) @ (B, D, N) -> (B, N, N)
         sim = torch.bmm(z_norm, z_norm.transpose(1, 2))
-        
-        # Convert to distance (0 to 2)
-        C = 1.0 - sim
-        return C
+        return 1.0 - sim
 
     def sinkhorn_knopp_log_domain(self, C: torch.Tensor, mu: torch.Tensor, nu: torch.Tensor) -> torch.Tensor:
-        """
-        Solves the Entropic Optimal Transport problem using the Sinkhorn-Knopp algorithm 
-        in the log-domain for numerical stability.
-        
-        Args:
-            C: (B, N_s, N_t) Cost matrix
-            mu: (B, N_s, 1) Source marginals (Student saliency)
-            nu: (B, N_t, 1) Target marginals (Teacher saliency)
-        Returns:
-            Gamma: (B, N_s, N_t) Optimal Transport Plan
-        """
         B, N_s, N_t = C.shape
-        
-        # Log-domain initialization
-        # K = exp(-C / epsilon)
         log_K = -C / self.ot_epsilon
+        u = torch.zeros_like(mu)
+        v = torch.zeros_like(nu)
         
-        # Potentials (dual variables)
-        u = torch.zeros_like(mu) # (B, N_s, 1)
-        v = torch.zeros_like(nu) # (B, N_t, 1)
-        
-        # Sinkhorn iterations
         for _ in range(self.ot_iters):
-            # Update u: u = log(mu) - logsumexp(log_K + v.T)
-            # log_K + v.transpose: (B, N_s, N_t) + (B, 1, N_t) -> (B, N_s, N_t)
             term = log_K + v.transpose(1, 2)
             u = torch.log(mu + 1e-8) - torch.logsumexp(term, dim=2, keepdim=True)
-            
-            # Update v: v = log(nu) - logsumexp(log_K.T + u)
-            term = log_K.transpose(1, 2) + u.transpose(1, 2) # (B, N_t, N_s)
+            term = log_K.transpose(1, 2) + u.transpose(1, 2)
             v = torch.log(nu + 1e-8) - torch.logsumexp(term, dim=2, keepdim=True)
             
-        # Get optimal plan Gamma = diag(u) * K * diag(v)
-        # log_Gamma = u + log_K + v.T
-        log_Gamma = u + log_K + v.transpose(1, 2)
-        Gamma = torch.exp(log_Gamma)
-        
-        return Gamma
+        return torch.exp(u + log_K + v.transpose(1, 2))
 
-    def fused_gromov_wasserstein(self, 
-                                 z_s: torch.Tensor, 
-                                 z_t: torch.Tensor, 
-                                 projector: nn.Module) -> torch.Tensor:
-        """
-        Computes the Fused Gromov-Wasserstein (FGW) loss.
-        
-        FGW combines:
-        1. Feature Cost (M): Cosine distance between Projected Student and Teacher features.
-        2. Structure Cost (GW): Discrepancy between intra-relational matrices.
-        
-        Args:
-            z_s: Student hidden states (B, N_s, D_s)
-            z_t: Teacher hidden states (B, N_t, D_t)
-            projector: Linear layer D_s -> D_t
-        """
-        B, N_s, D_s = z_s.shape
-        _, N_t, D_t = z_t.shape
+    def fused_gromov_wasserstein(self, z_s: torch.Tensor, z_t: torch.Tensor, projector: nn.Module) -> torch.Tensor:
+        mu = self.get_saliency_measure(z_s)
+        nu = self.get_saliency_measure(z_t)
+        C_s = self.compute_structure_matrix(z_s)
+        C_t = self.compute_structure_matrix(z_t)
 
-        # 1. Compute Saliency Measures (Mass)
-        mu = self.get_saliency_measure(z_s) # (B, N_s, 1)
-        nu = self.get_saliency_measure(z_t) # (B, N_t, 1)
-
-        # 2. Compute Structure Matrices (Geometry)
-        C_s = self.compute_structure_matrix(z_s) # (B, N_s, N_s)
-        C_t = self.compute_structure_matrix(z_t) # (B, N_t, N_t)
-
-        # 3. Compute Feature Cost Matrix M (Ground Metric)
-        # Align feature spaces first using the projector
-        z_s_proj = projector(z_s) # (B, N_s, D_t)
-        
-        # M_ik = 1 - cos(z_s_proj_i, z_t_k)
+        z_s_proj = projector(z_s)
         z_s_norm = F.normalize(z_s_proj, p=2, dim=-1)
         z_t_norm = F.normalize(z_t, p=2, dim=-1)
-        M = 1.0 - torch.bmm(z_s_norm, z_t_norm.transpose(1, 2)) # (B, N_s, N_t)
+        M = 1.0 - torch.bmm(z_s_norm, z_t_norm.transpose(1, 2))
 
-        # 4. Fused Cost for Sinkhorn
-        # Strictly, GW requires solving a Quadratic Assignment Problem (QAP).
-        # We use a standard relaxation: Use the Feature Cost M to find the transport plan Gamma,
-        # then evaluate the GW cost using that Gamma. This is efficient and stable.
-        
         Gamma = self.sinkhorn_knopp_log_domain(M, mu, nu)
         
-        # 5. Calculate Final Loss terms
-        
-        # Term A: Feature Alignment Loss (Wasserstein part)
-        # sum(M * Gamma)
         feat_loss = torch.sum(M * Gamma, dim=(1, 2)).mean()
         
-        # Term B: Structure Alignment Loss (Gromov part)
-        # L_gw = sum_{ijkl} |C_s_ij - C_t_kl|^2 * Gamma_ik * Gamma_jl
-        # Efficient calculation via tensor operations:
-        # |C_s - C_t|^2 = C_s^2 + C_t^2 - 2 C_s C_t
-        # This is expensive (O(N^4)). We approximate via the "Structure-wise MSE"
-        # weighted by the transport plan.
-        
-        # Project Teacher structure to Student space using Gamma: C_t_aligned = Gamma @ C_t @ Gamma.T
-        # Note: Since Gamma is non-square (N_s x N_t), we do:
-        # C_t_aligned ~ (B, N_s, N_s)
-        
-        # Normalize Gamma for mapping purposes
         Gamma_norm = Gamma / (Gamma.sum(dim=2, keepdim=True) + 1e-8)
-        
         C_t_mapped = torch.bmm(torch.bmm(Gamma_norm, C_t), Gamma_norm.transpose(1, 2))
-        
-        # Structure Loss: MSE between Student Structure and Mapped Teacher Structure
-        # Weighted by student saliency to focus on important tokens
         diff = (C_s - C_t_mapped) ** 2
         struct_loss = torch.sum(diff * (mu @ mu.transpose(1, 2)), dim=(1, 2)).mean()
 
-        # Total Fused Loss
-        loss = (1 - self.alpha) * feat_loss + self.alpha * struct_loss
-        return loss
+        return (1 - self.alpha) * feat_loss + self.alpha * struct_loss
 
     def forward(self, distiller: nn.Module, input_data: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        
         student_model = distiller.student
         teacher_model = distiller.teacher
         
-        # Inputs
-        student_input_qry = input_data['student_inputs']['qry']
-        student_input_pos = input_data['student_inputs']['pos']
-        teacher_input_qry = input_data['teacher_inputs']['qry']
-        teacher_input_pos = input_data['teacher_inputs']['pos']
+        # Unpack inputs
+        s_input_qry = input_data['student_inputs']['qry']
+        s_input_pos = input_data['student_inputs']['pos']
+        t_input_qry = input_data['teacher_inputs']['qry']
+        t_input_pos = input_data['teacher_inputs']['pos']
 
-        # --- 1. Teacher Forward (No Grad) ---
+        # Teacher Forward (No Grad)
         with torch.no_grad():
             teacher_model.eval()
-            # We assume encode_input returns (reps, ..., hidden_states)
-            # hidden_states is usually a tuple of layers. We want the last one.
-            t_q_reps, _, _, t_q_states = teacher_model.encode_input(teacher_input_qry)
-            t_p_reps, _, _, t_p_states = teacher_model.encode_input(teacher_input_pos)
-            
-            # Handle if states are tuple (take last layer)
-            if isinstance(t_q_states, (tuple, list)):
-                t_q_states = t_q_states[-1]
-                t_p_states = t_p_states[-1]
+            t_q_reps, _, _, t_q_states = teacher_model.encode_input(t_input_qry)
+            t_p_reps, _, _, t_p_states = teacher_model.encode_input(t_input_pos)
+            if isinstance(t_q_states, (tuple, list)): t_q_states = t_q_states[-1]; t_p_states = t_p_states[-1]
 
-        # --- 2. Student Forward (Grad) ---
-        s_q_reps, _, _, s_q_states = student_model.encode_input(student_input_qry)
-        s_p_reps, _, _, s_p_states = student_model.encode_input(student_input_pos)
-        
-        if isinstance(s_q_states, (tuple, list)):
-            s_q_states = s_q_states[-1]
-            s_p_states = s_p_states[-1]
+        # Student Forward
+        s_q_reps, _, _, s_q_states = student_model.encode_input(s_input_qry)
+        s_p_reps, _, _, s_p_states = student_model.encode_input(s_input_pos)
+        if isinstance(s_q_states, (tuple, list)): s_q_states = s_q_states[-1]; s_p_states = s_p_states[-1]
 
         total_loss = 0.0
-        contrastive_loss_acc = 0.0
-        holo_loss_acc = 0.0
+        contrastive_acc = 0.0
+        holo_acc = 0.0
+        rkd_acc = 0.0
 
-        # --- 3. Matryoshka Loop (Elasticity) ---
-        # We calculate loss at multiple granularities. 
-        # For full dimension, slice is the whole tensor.
-        
         full_dim = s_q_reps.shape[-1]
         
+        # --- Matryoshka Loop ---
         for i, dim in enumerate(self.matryoshka_dims):
             dim_weight = self.matryoshka_weights[i]
             current_dim = dim if dim is not None else full_dim
             
-            # Slice Representations (for Contrastive)
-            # Matryoshka slicing: take first k dimensions
-            s_q_rep_slice = F.normalize(s_q_reps[:, :current_dim], p=2, dim=-1)
-            s_p_rep_slice = F.normalize(s_p_reps[:, :current_dim], p=2, dim=-1)
+            # Slice Pooling Embeddings
+            s_q_slice = F.normalize(s_q_reps[:, :current_dim], p=2, dim=-1)
+            s_p_slice = F.normalize(s_p_reps[:, :current_dim], p=2, dim=-1)
             
-            # --- A. Contrastive Loss (Global Alignment) ---
-            # InfoNCE on the sliced embeddings
-            scores = torch.mm(s_q_rep_slice, s_p_rep_slice.t()) / self.temperature
+            # 1. Base Contrastive (Always apply to keep alignment)
+            scores = torch.mm(s_q_slice, s_p_slice.t()) / self.temperature
             labels = torch.arange(scores.size(0), device=scores.device)
-            mrl_contrastive = nn.CrossEntropyLoss()(scores, labels)
-            
-            contrastive_loss_acc += dim_weight * mrl_contrastive
+            contrastive_acc += dim_weight * nn.CrossEntropyLoss()(scores, labels)
 
-            # --- B. HoloDistill Loss (FGW on Hidden States) ---
-            # NOTE: We only apply FGW on the full hidden states usually, or we can project
-            # the hidden states if specific Matryoshka projectors exist. 
-            # For simplicity and efficiency, we apply HoloDistill mainly on the Full Dimension
-            # or use the projector defined in Distiller to align dimensions.
+            # === SPECTRAL DECOUPLING LOGIC ===
             
-            if current_dim == full_dim:
-                # Use the main projector from Distiller
-                # Check if distiller has specific projectors for alignment
-                # For this implementation, we use the 'last_layer_projector' or 't2s_align'
-                # defined in the Distiller class.
+            # CASE A: Low-Dimension Slices (Global/Coarse Geometry)
+            # Apply RKD here to force robust class separation in the "Index"
+            if current_dim is not None and current_dim <= 128:
+                s_batch = torch.cat([s_q_slice, s_p_slice], dim=0)
+                # Note: We need a teacher slice too? 
+                # Ideally yes, but usually RKD on student vs Full-Dim Teacher is okay, 
+                # OR slice the teacher too. Let's slice the teacher for consistency.
+                t_q_slice = F.normalize(t_q_reps[:, :current_dim], p=2, dim=-1)
+                t_p_slice = F.normalize(t_p_reps[:, :current_dim], p=2, dim=-1)
+                t_batch = torch.cat([t_q_slice, t_p_slice], dim=0)
+
+                loss_dist = self.compute_rkd_distance_loss(s_batch, t_batch)
+                loss_angle = self.compute_rkd_angle_loss(s_batch, t_batch)
                 
-                projector = getattr(distiller, 'holo_projector', None) or \
-                            getattr(distiller, 't2s_img_align', None)
+                # Higher weight for low-dim stability
+                rkd_val = (self.rkd_distance_weight * loss_dist) + (self.rkd_angle_weight * loss_angle)
+                rkd_acc += self.global_rkd_weight * rkd_val * 2.0  # Boost importance of low-dim structure
+
+            # CASE B: High-Dimension/Full Slices (Local/Fine Geometry)
+            # Apply Holo here to refine the internal topology without breaking the global index
+            elif current_dim is None or current_dim > 128:
+                # Only apply Holo if we are in the "Detail" spectrum
+                # Use the projector to map Full Student Hidden States -> Teacher
+                projector = getattr(distiller, 'holo_projector', None)
                 
-                if projector is None:
-                    # Fallback if no specific projector, though distiller.py usually ensures one
-                    logger.warning("No projector found for HoloDistill. Skipping FGW.")
-                    fgw_val = torch.tensor(0.0, device=scores.device)
-                else:
-                    # Apply FGW on Query and Pos samples separately and average
+                if projector is not None:
+                    # Holo works on the FULL hidden states (sequence), effectively refining
+                    # the "content" capacity of the model.
                     loss_q = self.fused_gromov_wasserstein(s_q_states, t_q_states, projector)
                     loss_p = self.fused_gromov_wasserstein(s_p_states, t_p_states, projector)
                     fgw_val = 0.5 * (loss_q + loss_p)
-
-                holo_loss_acc += dim_weight * fgw_val
-
+                    
+                    # We might weight this slightly less to let Contrastive dominate
+                    holo_acc += self.holo_weight * fgw_val
         # Final Weighted Sum
-        total_loss = contrastive_loss_acc + (self.kd_weight * holo_loss_acc)
+        # Contrastive + (Holo (Local)) + (RKD (Global))
+        total_loss = contrastive_acc + holo_acc + rkd_acc
 
         return {
             "loss": total_loss,
-            "contrastive_loss": contrastive_loss_acc,
-            "holo_fgw_loss": holo_loss_acc
+            "contrastive_loss": contrastive_acc,
+            "holo_fgw_loss": holo_acc,
+            "global_rkd_loss": rkd_acc
         }

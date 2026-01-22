@@ -10,7 +10,7 @@ from .em_kd_llava_ov import EMKDLLavaLoss
 from .span_propose import SpanProposeCriterion
 from .span_propose_attn import SpanProposeCriterionWeighted
 from .span_propose_attn_only_phrase import SpanProposeCriterionWeightedOnlyPhrase
-from .ckd import CKD
+from .ckd import CKDLoss
 from .holo import HoloDistillLoss
 
 criterion_list = {
@@ -26,7 +26,7 @@ criterion_list = {
     "span_propose_attn_only_phrase": SpanProposeCriterionWeightedOnlyPhrase,
     "ckd": CKDLoss,
     "mse": nn.MSELoss,
-    "ckd": CKD,
+    "ckd": CKDLoss,
     "holo": HoloDistillLoss
 }
 

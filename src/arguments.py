@@ -170,6 +170,7 @@ class ModelArguments:
     # New args for span loss
 
 
+
 @dataclass
 class DataArguments:
     """
@@ -191,6 +192,12 @@ class DataArguments:
         default='train',
         metadata={"help": "Dataset split (e.g., train, validation)"}
     )
+    # --- NEW ARGUMENT HERE ---
+    val_split_ratio: float = field(
+        default=0.0,
+        metadata={"help": "Ratio of the training set to be used for validation (e.g., 0.1 for 10%)"}
+    )
+    # -------------------------
     num_sample_per_subset: Optional[int] = field(
         default=None,
         metadata={"help": "Number of training samples per subset"}
@@ -205,8 +212,7 @@ class DataArguments:
     )
     max_len: Optional[int] = field(
         default=None,
-        metadata={"help": "Maximum total input sequence length after tokenization. "
-                          "Caution: may truncate text prompts due to large image lengths."}
+        metadata={"help": "Maximum total input sequence length after tokenization."}
     )
     embedding_type: str = field(
         default="",
@@ -214,21 +220,19 @@ class DataArguments:
     )
     image_resolution: Optional[str] = field(
         default=None,
-        metadata={"help": "Resolution for manual resize (high/mid/low). None means original. "
-                          "Only works when --resize_use_processor is false."}
+        metadata={"help": "Resolution for manual resize (high/mid/low)."}
     )
     resize_use_processor: bool = field(
         default=False,
-        metadata={"help": "Resize visual inputs inside processor (e.g., Qwen2VLImageProcessor) "
-                          "instead of by our custom code."}
+        metadata={"help": "Resize visual inputs inside processor."}
     )
     resize_min_pixels: int = field(
         default=28*28*4,
-        metadata={"help": "Min pixels for processor resize. Only works when --resize_use_processor is true."}
+        metadata={"help": "Min pixels for processor resize."}
     )
     resize_max_pixels: int = field(
         default=28*28*1280,
-        metadata={"help": "Max pixels for processor resize. Only works when --resize_use_processor is true."}
+        metadata={"help": "Max pixels for processor resize."}
     )
     image_decay_factor: Optional[float] = field(
         default=None,
@@ -238,7 +242,6 @@ class DataArguments:
         default=0,
         metadata={"help": "Number of hard negatives"}
     )
-    # New args
     sdibn: bool = field(
         default=False,
         metadata={"help": "Enable SDIBN"}
@@ -259,7 +262,6 @@ class DataArguments:
         default=32,
         metadata={"help": "Cluster sizes in metis. Only used in odibn"}
     )
-    # New args 2
     eval_dataset_name: Optional[str] = field(
         default=None,
         metadata={"help": "Evaluation dataset name"}
@@ -276,11 +278,11 @@ class DataArguments:
         default=False,
         metadata={"help": "Only use positives"}
     )
-    # New args distillation
     percent_data: float = field(
         default=1.0,
         metadata={"help": "Percentage of data used for distillation training"}
     )
+
 
 
 @dataclass
@@ -382,6 +384,10 @@ class TrainingArguments(HFTrainingArguments):
         default=1.0,
         metadata={"help": "Weight for cross modal loss"}
     )
+    # eval_steps: int field(
+    #     default=100,
+    #     metadata={"help" : "Evaluation each eval_steps"}
+    # )
 
 
 @dataclass
