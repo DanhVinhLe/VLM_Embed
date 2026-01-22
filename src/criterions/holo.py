@@ -1,19 +1,21 @@
 import logging
+from typing import Dict, Any, Tuple, List, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Any, Tuple, List, Optional
 
 logger = logging.getLogger(__name__)
 
 class HoloDistillLoss(nn.Module):
     """
-    HoloDistill + Global RKD (Hybrid Geometry).
+    HoloDistill + Global RKD (Hybrid Geometry) via Spectral Decoupling.
     
-    1. Global Scope: RKD (Distance + Angle) on [CLS]/Pooled embeddings.
-       - Ensures global class separability (Fixes ImageNet).
-    2. Local Scope: Fused Gromov-Wasserstein (FGW) on Token Hidden States.
-       - Ensures dense structural understanding (Preserves VOC dominance).
+    This criterion solves the "Capacity Conflict" between Global (ImageNet) and Local (VOC) tasks:
+    1. Global RKD: Applied to ALL slices, but uses 'Projected' features for the Full Dimension 
+       to prevent stiffening the manifold. Weighted heavier on the Core (Low-Dim) slice.
+    2. Local Holo (FGW): Applied ONLY to High-Dimension slices to refine dense structural 
+       topology without adding noise to the global index.
     """
 
     def __init__(self, args: Any):
@@ -21,20 +23,30 @@ class HoloDistillLoss(nn.Module):
         self.args = args
         self.temperature = getattr(args, "temperature", 0.07)
         
-        # --- Holo/FGW Hyperparameters ---
-        self.alpha = getattr(args, "holo_alpha", 0.5)
+        # --- Holo/FGW Hyperparameters (Local Structure) ---
+        # alpha=0.8: Focus 80% on Structure (Geometry), 20% on Features.
+        self.alpha = getattr(args, "holo_alpha", 0.8) 
         self.ot_epsilon = getattr(args, "ot_epsilon", 0.1)
         self.ot_iters = getattr(args, "ot_iters", 20)
-        self.holo_weight = getattr(args, "holo_weight", 1.0) # Weight for Token-level FGW
+        # holo_weight=0.5: Moderate weight to prevent noise from overpowering Global RKD.
+        self.holo_weight = getattr(args, "holo_weight", 0.5) 
         
-        # --- RKD Hyperparameters (From Baseline) ---
+        # --- RKD Hyperparameters (Global Semantics) ---
         self.rkd_distance_weight = getattr(args, "rkd_distance_weight", 1.0)
         self.rkd_angle_weight = getattr(args, "rkd_angle_weight", 2.0)
-        self.global_rkd_weight = getattr(args, "global_rkd_weight", 10.0) # Weight for Global RKD
+        # global_rkd_weight=2.0: Safe base weight for Full-Dimension RKD.
+        self.global_rkd_weight = getattr(args, "global_rkd_weight", 2.0)
 
-        # Matryoshka Config
+        # --- Matryoshka Config ---
+        # Default to [128, 768] (Core, Detail) if not provided
         self.matryoshka_dims = getattr(args, "matryoshka_dims", [128, 768]) 
-        self.matryoshka_weights = getattr(args, "matryoshka_weights", [1.0, 2.0])
+        
+        # Argument weights for the overall loss contribution of each slice
+        self.matryoshka_weights = getattr(args, "matryoshka_weights", [1.0] * len(self.matryoshka_dims))
+
+        # Internal Spectral Weights: [Core Multiplier, Detail Multiplier]
+        # We enforce 2x importance on the Core (128) slice for RKD stability.
+        self.spectral_multipliers = [2.0, 1.0]
 
     # ==========================
     # Part 1: RKD Modules (Global)
@@ -46,7 +58,7 @@ class HoloDistillLoss(nn.Module):
         return dist
 
     def compute_rkd_distance_loss(self, s: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """RKD Distance Loss (Huber-like)."""
+        """RKD Distance Loss (Huber-like) for robust global spacing."""
         dist_s = self.pairwise_distance(s)
         dist_t = self.pairwise_distance(t)
 
@@ -55,7 +67,7 @@ class HoloDistillLoss(nn.Module):
         dist_s = dist_s[mask]
         dist_t = dist_t[mask]
 
-        # Normalization (Crucial for stability)
+        # Normalization (Crucial for stability across different dims)
         mean_s = dist_s.mean().detach() + 1e-8
         mean_t = dist_t.mean().detach() + 1e-8
         dist_s = dist_s / mean_s
@@ -63,7 +75,7 @@ class HoloDistillLoss(nn.Module):
 
         diff = dist_s - dist_t
         abs_diff = torch.abs(diff)
-        # Huber loss
+        # Huber loss to handle outliers in noisy batches (e.g., News)
         loss = torch.where(abs_diff < 1.0, 0.5 * (abs_diff ** 2), abs_diff - 0.5)
         return loss.mean()
 
@@ -78,8 +90,7 @@ class HoloDistillLoss(nn.Module):
         return cos_angles
 
     def compute_rkd_angle_loss(self, s: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """RKD Angle Loss."""
-        # Often too heavy for full batch, can sample if OOM
+        """RKD Angle Loss for higher-order geometric consistency."""
         psi_s = self.angle_potentials(s)
         psi_t = self.angle_potentials(t)
 
@@ -103,16 +114,19 @@ class HoloDistillLoss(nn.Module):
     # Part 2: Holo/FGW Modules (Local)
     # ==========================
     def get_saliency_measure(self, hidden_states: torch.Tensor, temp: float = 1.0) -> torch.Tensor:
+        """Computes importance (probability mass) of each token based on Norm."""
         norms = torch.norm(hidden_states, p=2, dim=-1)
         weights = F.softmax(norms / temp, dim=-1)
         return weights.unsqueeze(-1)
 
     def compute_structure_matrix(self, z: torch.Tensor) -> torch.Tensor:
+        """Computes Intra-Relational Structure (Cosine Distance Matrix)."""
         z_norm = F.normalize(z, p=2, dim=-1)
         sim = torch.bmm(z_norm, z_norm.transpose(1, 2))
         return 1.0 - sim
 
     def sinkhorn_knopp_log_domain(self, C: torch.Tensor, mu: torch.Tensor, nu: torch.Tensor) -> torch.Tensor:
+        """Solves Entropic Optimal Transport via Sinkhorn-Knopp."""
         B, N_s, N_t = C.shape
         log_K = -C / self.ot_epsilon
         u = torch.zeros_like(mu)
@@ -127,25 +141,34 @@ class HoloDistillLoss(nn.Module):
         return torch.exp(u + log_K + v.transpose(1, 2))
 
     def fused_gromov_wasserstein(self, z_s: torch.Tensor, z_t: torch.Tensor, projector: nn.Module) -> torch.Tensor:
+        """Calculates Fused Gromov-Wasserstein alignment loss."""
         mu = self.get_saliency_measure(z_s)
         nu = self.get_saliency_measure(z_t)
         C_s = self.compute_structure_matrix(z_s)
         C_t = self.compute_structure_matrix(z_t)
 
+        # Feature Cost (Ground Metric): Projected Student <-> Teacher
         z_s_proj = projector(z_s)
         z_s_norm = F.normalize(z_s_proj, p=2, dim=-1)
         z_t_norm = F.normalize(z_t, p=2, dim=-1)
         M = 1.0 - torch.bmm(z_s_norm, z_t_norm.transpose(1, 2))
+        
+        # Normalize M for numerical stability with C
+        M = M / (M.mean() + 1e-8)
 
+        # Solve OT
         Gamma = self.sinkhorn_knopp_log_domain(M, mu, nu)
         
+        # Feature Loss (Wasserstein)
         feat_loss = torch.sum(M * Gamma, dim=(1, 2)).mean()
         
+        # Structure Loss (Gromov) - Approximated via mapped structure MSE
         Gamma_norm = Gamma / (Gamma.sum(dim=2, keepdim=True) + 1e-8)
         C_t_mapped = torch.bmm(torch.bmm(Gamma_norm, C_t), Gamma_norm.transpose(1, 2))
         diff = (C_s - C_t_mapped) ** 2
         struct_loss = torch.sum(diff * (mu @ mu.transpose(1, 2)), dim=(1, 2)).mean()
 
+        # Weighted Combination
         return (1 - self.alpha) * feat_loss + self.alpha * struct_loss
 
     def forward(self, distiller: nn.Module, input_data: Dict[str, Any]) -> Dict[str, torch.Tensor]:
@@ -158,17 +181,22 @@ class HoloDistillLoss(nn.Module):
         t_input_qry = input_data['teacher_inputs']['qry']
         t_input_pos = input_data['teacher_inputs']['pos']
 
-        # Teacher Forward (No Grad)
+        # --- Teacher Forward (No Grad) ---
         with torch.no_grad():
             teacher_model.eval()
             t_q_reps, _, _, t_q_states = teacher_model.encode_input(t_input_qry)
             t_p_reps, _, _, t_p_states = teacher_model.encode_input(t_input_pos)
-            if isinstance(t_q_states, (tuple, list)): t_q_states = t_q_states[-1]; t_p_states = t_p_states[-1]
+            # Handle tuple returns (take last layer)
+            if isinstance(t_q_states, (tuple, list)): 
+                t_q_states = t_q_states[-1]
+                t_p_states = t_p_states[-1]
 
-        # Student Forward
+        # --- Student Forward ---
         s_q_reps, _, _, s_q_states = student_model.encode_input(s_input_qry)
         s_p_reps, _, _, s_p_states = student_model.encode_input(s_input_pos)
-        if isinstance(s_q_states, (tuple, list)): s_q_states = s_q_states[-1]; s_p_states = s_p_states[-1]
+        if isinstance(s_q_states, (tuple, list)): 
+            s_q_states = s_q_states[-1]
+            s_p_states = s_p_states[-1]
 
         total_loss = 0.0
         contrastive_acc = 0.0
@@ -177,58 +205,75 @@ class HoloDistillLoss(nn.Module):
 
         full_dim = s_q_reps.shape[-1]
         
-        # --- Matryoshka Loop ---
+        # Handle spectral multipliers (default fallback)
+        spec_mults = self.spectral_multipliers
+        if len(spec_mults) < len(self.matryoshka_dims):
+            spec_mults = [1.0] * len(self.matryoshka_dims)
+
+        # --- Matryoshka Loop (Spectral Decoupling) ---
         for i, dim in enumerate(self.matryoshka_dims):
-            dim_weight = self.matryoshka_weights[i]
+            # Base weight for this slice (e.g. from args)
+            dim_weight = self.matryoshka_weights[i] if i < len(self.matryoshka_weights) else 1.0
+            
+            # Spectral multiplier (e.g. 2.0 for Core, 1.0 for Detail)
+            # We ONLY apply this to the Geometry Losses (RKD/Holo), NOT Contrastive
+            # to preserve VOC details (as verified in v3).
+            spec_w = spec_mults[i]
+            
             current_dim = dim if dim is not None else full_dim
             
-            # Slice Pooling Embeddings
+            # --- 1. Slice & Normalize ---
             s_q_slice = F.normalize(s_q_reps[:, :current_dim], p=2, dim=-1)
             s_p_slice = F.normalize(s_p_reps[:, :current_dim], p=2, dim=-1)
             
-            # 1. Base Contrastive (Always apply to keep alignment)
+            # --- 2. Contrastive Loss (Uniform Spectrum) ---
+            # We do NOT multiply by spec_w here. We want uniform contrastive pressure.
             scores = torch.mm(s_q_slice, s_p_slice.t()) / self.temperature
             labels = torch.arange(scores.size(0), device=scores.device)
             contrastive_acc += dim_weight * nn.CrossEntropyLoss()(scores, labels)
 
-            # === SPECTRAL DECOUPLING LOGIC ===
+            # --- 3. Hybrid Geometry (RKD + Holo) ---
+            projector = getattr(distiller, 'holo_projector', None)
+
+            # A. GLOBAL RKD (ImageNet/News)
+            # Applied to ALL slices to ensure consistent class separation.
+            # Fix: If Full Dimension + Projector exists, use Projected RKD.
+            # This allows the Student to be "Flexible" (in raw space) but "Accurate" (in teacher space).
             
-            # CASE A: Low-Dimension Slices (Global/Coarse Geometry)
-            # Apply RKD here to force robust class separation in the "Index"
-            if current_dim is not None and current_dim <= 128:
-                s_batch = torch.cat([s_q_slice, s_p_slice], dim=0)
-                # Note: We need a teacher slice too? 
-                # Ideally yes, but usually RKD on student vs Full-Dim Teacher is okay, 
-                # OR slice the teacher too. Let's slice the teacher for consistency.
-                t_q_slice = F.normalize(t_q_reps[:, :current_dim], p=2, dim=-1)
-                t_p_slice = F.normalize(t_p_reps[:, :current_dim], p=2, dim=-1)
-                t_batch = torch.cat([t_q_slice, t_p_slice], dim=0)
+            if projector is not None and current_dim == full_dim:
+                 # Projected RKD (Flexible)
+                 s_q_proj = F.normalize(projector(s_q_reps), p=2, dim=-1)
+                 s_p_proj = F.normalize(projector(s_p_reps), p=2, dim=-1)
+                 s_batch = torch.cat([s_q_proj, s_p_proj], dim=0)
+            else:
+                 # Standard RKD (Rigid) - Necessary for low-dim slices
+                 s_batch = torch.cat([s_q_slice, s_p_slice], dim=0)
 
-                loss_dist = self.compute_rkd_distance_loss(s_batch, t_batch)
-                loss_angle = self.compute_rkd_angle_loss(s_batch, t_batch)
-                
-                # Higher weight for low-dim stability
-                rkd_val = (self.rkd_distance_weight * loss_dist) + (self.rkd_angle_weight * loss_angle)
-                rkd_acc += self.global_rkd_weight * rkd_val * 2.0  # Boost importance of low-dim structure
+            t_q_slice = F.normalize(t_q_reps[:, :current_dim], p=2, dim=-1)
+            t_p_slice = F.normalize(t_p_reps[:, :current_dim], p=2, dim=-1)
+            t_batch = torch.cat([t_q_slice, t_p_slice], dim=0)
 
-            # CASE B: High-Dimension/Full Slices (Local/Fine Geometry)
-            # Apply Holo here to refine the internal topology without breaking the global index
-            elif current_dim is None or current_dim > 128:
-                # Only apply Holo if we are in the "Detail" spectrum
-                # Use the projector to map Full Student Hidden States -> Teacher
-                projector = getattr(distiller, 'holo_projector', None)
-                
+            loss_dist = self.compute_rkd_distance_loss(s_batch, t_batch)
+            loss_angle = self.compute_rkd_angle_loss(s_batch, t_batch)
+            
+            rkd_val = (self.rkd_distance_weight * loss_dist) + (self.rkd_angle_weight * loss_angle)
+            
+            # Apply Spectral Multiplier (2.0x for Core, 1.0x for Detail)
+            rkd_acc += (self.global_rkd_weight * spec_w) * rkd_val 
+
+            # B. LOCAL HOLO (VOC)
+            # Applied ONLY to High/Full Dimensions.
+            # Low dims are too compressed for meaningful Gromov-Wasserstein structure.
+            if current_dim is None or current_dim > 128:
                 if projector is not None:
-                    # Holo works on the FULL hidden states (sequence), effectively refining
-                    # the "content" capacity of the model.
                     loss_q = self.fused_gromov_wasserstein(s_q_states, t_q_states, projector)
                     loss_p = self.fused_gromov_wasserstein(s_p_states, t_p_states, projector)
-                    fgw_val = 0.5 * (loss_q + loss_p)
                     
-                    # We might weight this slightly less to let Contrastive dominate
-                    holo_acc += self.holo_weight * fgw_val
+                    fgw_val = 0.5 * (loss_q + loss_p)
+                    # Apply Spectral Multiplier (1.0x usually)
+                    holo_acc += (self.holo_weight * spec_w) * fgw_val
+
         # Final Weighted Sum
-        # Contrastive + (Holo (Local)) + (RKD (Global))
         total_loss = contrastive_acc + holo_acc + rkd_acc
 
         return {
