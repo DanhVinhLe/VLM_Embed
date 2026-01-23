@@ -6,6 +6,8 @@ NUM_GPUS_PER_NODE=1
 # Đường dẫn tới file script training của bạn
 TRAIN_SCRIPT="train_distill_ddp.py"
 
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+
 # =========================================================================
 # Dùng torchrun để khởi chạy
 # =========================================================================
@@ -15,7 +17,8 @@ torchrun --standalone \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \
     --teacher_lora True \
-    --lora_r 64 \
+    --lora_r 128 \
+    --lora_alpha 128 \
     --teacher_lora_r 8 \
     --teacher_pooling "eos" \
     --teacher_backbone "qwen2_vl" \
@@ -26,9 +29,9 @@ torchrun --standalone \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
     --percent_data 0.3 \
-    --output_dir "training/meta_propose_grounding" \
-    --per_device_train_batch_size 10 \
-    --gradient_accumulation_steps 1 \
+    --output_dir "training/meta_propose_grounding_v3" \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 2 \
     --learning_rate 1e-4 \
     --num_train_epochs 2 \
     --bf16 \
@@ -41,8 +44,8 @@ torchrun --standalone \
     --teacher_normalize True \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
-    --kd_weight 0.3 \
+    --kd_weight 0.2 \
     --kd_loss_type "proposal_dtw" \
-    --image_resolution "mid" \
+    --image_resolution "low" \
     --projector_config_path "./config/projector_config.json" \
     --projector_lr 5e-5

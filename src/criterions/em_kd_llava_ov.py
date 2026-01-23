@@ -89,8 +89,11 @@ class EMKDLLavaLoss(nn.Module):
                         teacher_qry_text_hidden_state = teacher_qry_hidden_states[-1][i][-num_text_token_qry_tea:, :]
                         # print(f"Sample qry {i}: student_qry_vision_hidden_state shape {student_qry_vision_hidden_state.shape}, teacher_qry_vision_hidden_state shape {teacher_qry_vision_hidden_state.shape}, student_qry_text_hidden_state shape {student_qry_text_hidden_state.shape}, teacher_qry_text_hidden_state shape {teacher_qry_text_hidden_state.shape}")
                         # print(f"Sample qry {i}: student_qry_hidden_state shape {student_qry_hidden_states[-1][i].shape}, teacher_qry_hidden_state shape {teacher_qry_hidden_states[-1][i].shape}")
+                        with torch.no_grad():
+                            
+                            vl_t = teacher_model.encoder.lm_head(teacher_qry_vision_hidden_state)
+                            
                         vl_s = student_model.encoder.lm_head(student_qry_vision_hidden_state)
-                        vl_t = teacher_model.encoder.lm_head(teacher_qry_vision_hidden_state)
                         
                         s_dim1 = vl_s.size(1)
                         t_dim1 = vl_t.size(1)

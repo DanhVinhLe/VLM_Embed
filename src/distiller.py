@@ -148,7 +148,7 @@ class Distiller(nn.Module):
         return processor
     
     def forward(self, criterion, batch):
-        if self.training_args.kd_loss_type in ['span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase' ]:
+        if self.training_args.kd_loss_type in ['span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase', 'span_propose_attn_only_word']:
             loss = criterion(self, batch, tokenizer = self.tokenizer)
         else: 
             loss = criterion(self, batch)

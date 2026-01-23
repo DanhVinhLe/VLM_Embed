@@ -13,7 +13,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # =========================================================================
 torchrun --standalone \
     --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
-    --model_name "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
+    --model_name apple/FastVLM-0.5B \
     --teacher_model_name "raghavlite/B3_Qwen2_2B" \
     --lora True \
     --teacher_lora True \
@@ -22,15 +22,15 @@ torchrun --standalone \
     --teacher_lora_r 8 \
     --teacher_pooling "eos" \
     --teacher_backbone "qwen2_vl" \
-    --model_backbone "llava_onevision" \
+    --model_backbone "llava_qwen2" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
     --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" \
     --dataset_split "original" \
     --image_dir "/workspace/ComfyUI/models/photomaker/VLM_Embed/vlm2vec_train/MMEB-train" \
     --percent_data 1.0 \
-    --output_dir "training/meta_emkd_llava_ov_cls" \
-    --per_device_train_batch_size 4 \
+    --output_dir "training/meta_span_weighted_phrase_cls" \
+    --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 1 \
     --learning_rate 1e-4 \
     --num_train_epochs 1 \
@@ -44,8 +44,11 @@ torchrun --standalone \
     --teacher_normalize True \
     --lr_scheduler_type "cosine" \
     --warmup_ratio 0.03 \
-    --kd_weight 0.3 \
-    --kd_loss_type "em_kd_llava_ov" \
+    --kd_weight 2.5 \
+    --w_cross_modal_loss 2.5 \
+    --kd_loss_type "span_propose_attn_only_word" \
     --image_resolution "low" \
-    --projector_config_path "./config/projector_config_emo.json" \
+    --teacher_layer_mapping 0 14 21 28 \
+    --student_layer_mapping 0 12 18 24 \
+    --split_layer_mapping 0 1 4 4 4 \
     --projector_lr 5e-4
