@@ -287,7 +287,7 @@ def main():
             num_trainable_vision += p.numel()
     print_rank(f"Number of trainable vision parameters: {num_trainable_vision}")
     
-    if training_args.kd_loss_type in ['span_propose_wo_hid_cross', 'span_propose_wo_hid_intra']:
+    if training_args.kd_loss_type in ['span_propose_wo_hid_cross', 'span_propose_wo_hid_intra', 'span_propose_wo_hid']:
         if hasattr(distiller, 'projectors'):
             for n, p in distiller.projectors.named_parameters():
                 p.requires_grad = False

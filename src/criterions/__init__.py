@@ -11,6 +11,10 @@ from .span_propose_attn_only_phrase import SpanProposeCriterionWeightedOnlyPhras
 from .span_propose_wo_hid_cross import SpanProposeCriterionWeightedWOHidCross
 from .span_propose_wo_hid_intra import SpanProposeCriterionWeightedWOHidIntra
 from .span_propose_wo_intra_cross import SpanProposeCriterionWeightedWOIntraCross
+from .span_propose_attn_fix import SpanProposeCriterionWeightedFix
+from .span_propose_wo_hid import SpanProposeCriterionWeightedWOHid
+from .span_propose_wo_intra import SpanProposeCriterionWeightedWOIntra
+from .span_propose_wo_cross import SpanProposeCriterionWeightedWOCross
 
 criterion_list = {
     "contrastive_rkd": ContrastiveLossWithRKD,
@@ -26,6 +30,10 @@ criterion_list = {
     "span_propose_wo_hid_cross": SpanProposeCriterionWeightedWOHidCross,
     "span_propose_wo_hid_intra": SpanProposeCriterionWeightedWOHidIntra,
     "span_propose_wo_intra_cross": SpanProposeCriterionWeightedWOIntraCross,
+    "span_propose_attn_fix": SpanProposeCriterionWeightedFix,
+    "span_propose_wo_hid": SpanProposeCriterionWeightedWOHid,
+    "span_propose_wo_intra": SpanProposeCriterionWeightedWOIntra,
+    "span_propose_wo_cross": SpanProposeCriterionWeightedWOCross
 }
 
 def build_criterion(args):
