@@ -10,6 +10,174 @@ from typing import List, Optional
 
 from transformers import TrainingArguments as HFTrainingArguments
 
+# =============================================================================
+#  Method-Specific Argument Mixins (New Configs)
+# =============================================================================
+
+@dataclass
+class DistillationArguments:
+    """
+    General arguments for Knowledge Distillation (KD).
+    """
+    kd_loss_type: str = field(
+        default="contrastive_rkd",
+        metadata={"help": "Type of KD loss. (e.g., 'contrastive_rkd', 'ckd', 'holo', 'kl')"}
+    )
+    kd_weight: float = field(
+        default=0.01,
+        metadata={"help": "Weight of KD loss in total loss"}
+    )
+    teacher_layer_mapping: List[int] = field(
+        default_factory=list,
+        metadata={"help": "List of teacher layers used for distillation"}
+    )
+    student_layer_mapping: List[int] = field(
+        default_factory=list,
+        metadata={"help": "List of student layers used for distillation"}
+    )
+
+
+@dataclass
+class RKDArguments:
+    """
+    Arguments specific to Relational Knowledge Distillation (RKD).
+    """
+    rkd_distance_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight of distance loss in total KD loss"}
+    )
+    rkd_angle_weight: float = field(
+        default=2.0,
+        metadata={"help": "Weight of angle loss in total KD loss"}
+    )
+
+
+@dataclass
+class CKDArguments:
+    """
+    Arguments specific to Contrastive Knowledge Distillation (CKD).
+    """
+    ckd_temperature: float = field(
+        default=0.07,
+        metadata={"help": "Temperature for Contrastive KD"}
+    )
+    ckd_momentum: float = field(
+        default=0.999,
+        metadata={"help": "Momentum for updating key encoder in CKD (if applicable)"}
+    )
+
+
+@dataclass
+class ProposalArguments:
+    """
+    Arguments specific to Proposal-based Knowledge Distillation.
+    """
+    attn_loss_weight: float = field(
+        default=0.1,
+        metadata={"help": "Weight of the attention CKA loss in the total KD loss"}
+    )
+    k_layer_attention: int = field(
+        default=3,
+        metadata={"help": "Number of last layers to use for attention CKA loss"}
+    )
+
+
+@dataclass
+class EMOArguments:
+    """
+    Arguments specific to EMO Knowledge Distillation.
+    """
+    attn_loss_weight: float = field(
+        default=0.1,
+        metadata={"help": "Weight of the attention CKA loss in the total KD loss"}
+    )
+    ot_loss_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight of the Optimal Transport loss in the total KD loss"}
+    )
+    k_layer_attention: int = field(
+        default=3,
+        metadata={"help": "Number of last layers to use for attention CKA loss"}
+    )
+    sinkhorn_alpha: float = field(
+        default=0.1,
+        metadata={"help": "Alpha parameter for the Sinkhorn algorithm"}
+    )
+    ot_max_iter: int = field(
+        default=100,
+        metadata={"help": "Maximum iterations for the Sinkhorn algorithm"}
+    )
+    ot_dist_type: str = field(
+        default='cosine',
+        metadata={"help": "Distance type for the OT cost matrix (e.g., 'cosine', 'euclidean')"}
+    )
+
+
+@dataclass
+class EMKDArguments:
+    """
+    Arguments specific to Exact Matching Knowledge Distillation (EMKD).
+    """
+    vsd_loss_weight: float = field(
+        default=0.25,
+        metadata={"help": "Weight for the Vision Semantic Distillation (VSD) loss"}
+    )
+    vlad_loss_weight: float = field(
+        default=25.0,
+        metadata={"help": "Weight for the Vision-Language Alignment Distillation (VLAD) loss"}
+    )
+    contrastive_loss_weight: float = field(
+        default=0.5,
+        metadata={"help": "Weight for the contrastive loss component"}
+    )
+    mse_loss_weight: float = field(
+        default=0.5,
+        metadata={"help": "Weight for the global MSE loss component"}
+    )
+
+
+@dataclass
+class HoloDistillArguments:
+    """
+    Arguments specific to HoloDistill Knowledge Distillation.
+    """
+    temperature: float = field(
+        default=0.07,
+        metadata={"help": "Temperature for softmax in contrastive loss"}
+    )
+    holo_alpha: float = field(
+        default=0.8,
+        metadata={"help": "Alpha for blending feature and structure loss in FGW"}
+    )
+    ot_epsilon: float = field(
+        default=0.1,
+        metadata={"help": "Epsilon for entropic regularization in OT"}
+    )
+    ot_iters: int = field(
+        default=20,
+        metadata={"help": "Number of Sinkhorn iterations for OT"}
+    )
+    holo_weight: float = field(
+        default=0.5,
+        metadata={"help": "Weight for the Holo (FGW) distillation loss"}
+    )
+    global_rkd_weight: float = field(
+        default=2.0,
+        metadata={"help": "Weight for the global RKD loss component"}
+    )
+    matryoshka_dims: List[int] = field(
+        default_factory=lambda: [128, 768],
+        metadata={"help": "List of dimensions for Matryoshka-style training"}
+    )
+    matryoshka_weights: List[float] = field(
+        default_factory=lambda: [1.0, 1.0],
+        metadata={"help": "List of loss weights for each Matryoshka dimension"}
+    )
+
+
+# =============================================================================
+#  Main Argument Classes
+# =============================================================================
 
 @dataclass
 class ModelArguments:
@@ -167,8 +335,6 @@ class ModelArguments:
         default=False,
         metadata={"help": "Load pretrained LoRA model for student"}
     )
-    # New args for span loss
-
 
 
 @dataclass
@@ -192,12 +358,10 @@ class DataArguments:
         default='train',
         metadata={"help": "Dataset split (e.g., train, validation)"}
     )
-    # --- NEW ARGUMENT HERE ---
     val_split_ratio: float = field(
         default=0.0,
         metadata={"help": "Ratio of the training set to be used for validation (e.g., 0.1 for 10%)"}
     )
-    # -------------------------
     num_sample_per_subset: Optional[int] = field(
         default=None,
         metadata={"help": "Number of training samples per subset"}
@@ -284,11 +448,11 @@ class DataArguments:
     )
 
 
-
 @dataclass
-class TrainingArguments(HFTrainingArguments):
+class TrainingArguments(DistillationArguments, RKDArguments, CKDArguments, ProposalArguments, EMOArguments, EMKDArguments, HoloDistillArguments, HFTrainingArguments):
     """
-    Training arguments specific to this project, extending HuggingFace's TrainingArguments.
+    Training arguments specific to this project, extending HuggingFace's TrainingArguments
+    and our custom mixins.
     """
     image_encoder_freeze: bool = field(
         default=False,
@@ -312,7 +476,7 @@ class TrainingArguments(HFTrainingArguments):
         metadata={"help": "Number of update steps between two logs"}
     )
     num_train_epochs: float = field(
-        default=1.0,  # Changed to float as it's often fractional
+        default=1.0,
         metadata={"help": "Total number of training epochs to perform"}
     )
     grad_cache: bool = field(
@@ -336,28 +500,9 @@ class TrainingArguments(HFTrainingArguments):
         metadata={"help": "Specify mini-batch size to interleave data from multi-sources. "
                           "0/None means random sampling by examples, 1 means full batch."}
     )
-    # New args
     gc_dynamic_limit: int = field(
         default=125,
-        metadata={"help": "gc_chunk default limit. E.g., for Qwen2b (128, 125) works. "
-                          "gc_dynamic_limit would be 125 and gc_p|q_chunk_size would be 128"}
-    )
-    # New kd loss weight
-    kd_weight: float = field(
-        default=0.01,
-        metadata={"help": "Weight of KD loss in total loss"}
-    )
-    rkd_distance_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight of distance loss in total KD loss"}
-    )
-    rkd_angle_weight: float = field(
-        default=2.0,
-        metadata={"help": "Weight of angle loss in total KD loss"}
-    )
-    kd_loss_type: str = field(
-        default="contrastive_rkd",
-        metadata={"help": "Type of KD loss. Currently only supports 'contrastive_rkd'"}
+        metadata={"help": "gc_chunk default limit. E.g., for Qwen2b (128, 125) works."}
     )
     ds_config: Optional[str] = field(
         default=None,
@@ -367,15 +512,6 @@ class TrainingArguments(HFTrainingArguments):
         default=None,
         metadata={"help": "DeepSpeed config json file path (duplicate arg for compatibility)"}
     )
-    # New args for span loss
-    teacher_layer_mapping: List[int] = field(
-        default_factory=list,
-        metadata={"help": "List of teacher layers used for distillation; number of elements equals number of projectors"}
-    )
-    student_layer_mapping: List[int] = field(
-        default_factory=list,
-        metadata={"help": "List of student layers used for distillation; number of elements equals number of projectors"}
-    )
     split_layer_mapping: List[int] = field(
         default_factory=list,
         metadata={"help": "List of split layers for student; number of elements equals number of projectors"}
@@ -384,10 +520,6 @@ class TrainingArguments(HFTrainingArguments):
         default=1.0,
         metadata={"help": "Weight for cross modal loss"}
     )
-    # eval_steps: int field(
-    #     default=100,
-    #     metadata={"help" : "Evaluation each eval_steps"}
-    # )
 
 
 @dataclass

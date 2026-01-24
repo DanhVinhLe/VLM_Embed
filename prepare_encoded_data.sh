@@ -1,2 +1,0 @@
-python  prepare_data.py  --model_name raghavlite/B3_Qwen2_2B --encode_output_path  ./encoded_data/B2_Qwen2_2B/  --pooling  eos  --normalize  True  --lora  --lora_r  8  --bf16  --dataset_name  TIGER-Lab/MMEB-train  --subset_name  ImageNet_1K N24News HatefulMemes VOC2007 SUN397 --dataset_split  original  --per_device_eval_batch_size  32  --image_dir  vlm2vec_train/MMEB-train 
-# Modify model name to change teacher, change the subset_name to add more data train 

@@ -1,51 +1,66 @@
 import os
 import subprocess
 from huggingface_hub import hf_hub_download
+from multiprocessing import Pool
 
-# Danh sách zip file cần tải
-files = {
-    "ImageNet_1K.zip": "images_zip/ImageNet_1K.zip",
-    "N24News.zip": "images_zip/N24News.zip",
-    "SUN397.zip": "images_zip/SUN397.zip",
-    "HatefulMemes.zip": "images_zip/HatefulMemes.zip",
-}
+# List of zip files to download
+FILE_LIST = [
+    "A-OKVQA.zip", "CIRR.zip", "ChartQA.zip", "DocVQA.zip", "HatefulMemes.zip",
+    "ImageNet_1K.zip", "InfographicsVQA.zip", "MSCOCO.zip", "MSCOCO_i2t.zip",
+    "MSCOCO_t2i.zip", "N24News.zip", "NIGHTS.zip", "OK-VQA.zip", "SUN397.zip",
+    "VOC2007.zip", "VisDial.zip", "Visual7W.zip", "VisualNews_i2t.zip",
+    "VisualNews_t2i.zip", "WebQA.zip"
+]
 
-dataset = "TIGER-Lab/MMEB-train"
-save_dir = "./vlm2vec_train/MMEB-train/images"
+DATASET_REPO = "TIGER-Lab/MMEB-train"
+SAVE_DIR = "./vlm2vec_train/MMEB-train/images"
+TEMP_DOWNLOAD_DIR = "./downloads"
 
-os.makedirs(save_dir, exist_ok=True)
+def download_file(file_name):
+    """Downloads a single file from the Hugging Face Hub."""
+    repo_path = f"images_zip/{file_name}"
+    print(f"⬇️ Downloading {file_name} ...")
+    try:
+        downloaded_path = hf_hub_download(
+            repo_id=DATASET_REPO,
+            filename=repo_path,
+            local_dir=TEMP_DOWNLOAD_DIR,
+            repo_type="dataset"
+        )
+        return downloaded_path
+    except Exception as e:
+        print(f"❌ Failed to download {file_name}. Error: {e}")
+        return None
 
-def fast_unzip(zip_path, output_dir):
-    """
-    Giải nén bằng subprocess (unzip -q) để chạy nhanh
-    """
+def unzip_file(zip_path):
+    """Unzips a file and removes the zip archive."""
+    if zip_path is None:
+        return
     print(f"📦 Unzipping {zip_path} ...")
-    subprocess.run(["unzip", "-q", zip_path, "-d", output_dir], check=True)
-    os.remove(zip_path)
-    print(f"✔️ Done {zip_path}")
+    try:
+        subprocess.run(["unzip", "-q", zip_path, "-d", SAVE_DIR], check=True)
+        os.remove(zip_path)
+        print(f"✔️ Unzipped and removed {zip_path}")
+    except Exception as e:
+        print(f"❌ Failed to unzip {zip_path}. Error: {e}")
 
-# Tải từng file bằng hf_hub_download
-local_paths = []
-for name, repo_path in files.items():
-    print(f"⬇️ Downloading {name} ...")
-    downloaded = hf_hub_download(
-        repo_id=dataset,
-        filename=repo_path,
-        local_dir="./downloads",   # tải tạm
-        repo_type="dataset"
-    )
-    local_paths.append(downloaded)
+def main():
+    """Main function to download and unzip all files."""
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
 
-# Giải nén song song
-processes = []
-for zip_file in local_paths:
-    p = subprocess.Popen(["unzip", "-q", zip_file, "-d", save_dir])
-    processes.append((p, zip_file))
+    # Download files sequentially
+    downloaded_paths = [download_file(f) for f in FILE_LIST]
 
-# Đợi tất cả hoàn thành
-for p, zip_file in processes:
-    p.wait()
-    os.remove(zip_file)
-    print(f"✔️ Unzipped & removed {zip_file}")
+    # Unzip files in parallel
+    with Pool(processes=os.cpu_count()) as pool:
+        pool.map(unzip_file, [p for p in downloaded_paths if p])
+    
+    # Clean up the temporary download directory
+    if os.path.exists(TEMP_DOWNLOAD_DIR) and not os.listdir(TEMP_DOWNLOAD_DIR):
+        os.rmdir(TEMP_DOWNLOAD_DIR)
 
-print("🎉 All done!")
+    print("🎉 All done!")
+
+if __name__ == "__main__":
+    main()

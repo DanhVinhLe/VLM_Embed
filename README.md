@@ -1,58 +1,82 @@
-# VLMEmbed
-## Set up env
+# VLM-Embed: Visual Language Model Embedding
+
+VLM-Embed is a project focused on creating powerful and efficient embeddings from Visual Language Models (VLMs) using distillation techniques. This repository provides the tools to train, evaluate, and distill VLMs for various tasks.
+
+## 🚀 Getting Started
+
+### 1. Environment Setup
+
+First, create and activate a Python virtual environment.
+
 ```bash
-apt-get update
-apt-get upgrade -y
-cd VLM_Embed
 python -m venv vlm
 source vlm/bin/activate
 ```
-## Set up
-```
+
+### 2. Install Dependencies
+
+Install the required Python packages using pip.
+
+```bash
 pip install -r requirements.txt
 ```
-## Download dataset
-1. Download the eval image file zip from huggingface (`optional`) 
-```bash
-cd VLM_Embed
-wget https://huggingface.co/datasets/TIGER-Lab/MMEB-eval/resolve/main/images.zip
-unzip images.zip -d eval_images/
-```
-2. Download train image, it can take > 1 hour to download
-```bash
-cd VLM_Embed
-bash download_traindata.sh
-bash download_traindata_2.sh
-```
-3. Fix some line code 
 
-Because of the error of code in **Transformers library**, run the following script to find the error and comment some lines: 
+### 3. Apply Library Fix
 
-Just comment the following code, from line 140 to 143 in file **/vlm/lib/python3.12/site-packages/transformers/models/qwen2_vl/image_processing_qwen2_vl.py**: 
-```python
-if size is not None and ("shortest_edge" not in size or "longest_edge" not in size):
-    raise ValueError("size must contain 'shortest_edge' and 'longest_edge' keys.")
-else:
-    size = {"shortest_edge": 56 * 56, "longest_edge": 28 * 28 * 1280}
-```
-Or run `fix_lib.py` to fix: 
-```python 
+This project requires a small modification to the `transformers` library to address a specific issue. A script is provided to apply this fix automatically.
+
+```bash
 python fix_lib.py
 ```
+This will comment out a few lines in `transformers/models/qwen2_vl/image_processing_qwen2_vl.py` that can cause issues.
 
-## Training
+### 4. Download Datasets
 
-Just run the scripts in folder `scripts`
-- For run RKD: 
+The training and evaluation datasets can be downloaded using the provided Python script. This script uses `huggingface-hub` for efficient downloading and unzips the files into the correct directory (`./vlm2vec_train/MMEB-train/images`).
+
+The script will download approximately 20 datasets, which can take a significant amount of time and disk space.
+
+```bash
+python download.py
+```
+
+You can also optionally download the evaluation image files separately if needed:
+
+```bash
+wget https://huggingface.co/datasets/TIGER-Lab/MMEB-eval/resolve/main/images.zip
+unzip images.zip -d eval_images/
+rm images.zip
+```
+
+## 🚂 Training
+
+The `scripts` directory contains various shell scripts for running different training configurations. These scripts are the primary way to initiate training.
+
+For example, to train a model using Relational Knowledge Distillation (RKD), you can run:
+
 ```bash
 bash scripts/train_RKD.sh
-bash scripts/train_distill_propose_V.sh
-```
-## Inference & Evaluation
-1. To evaluate our model on an MMEB dataset (e.g., MSCOCO_i2t), run:
-```bash 
-bash eval.sh
 ```
 
-## Acknowledgement
-- We have adapted code from [VLM2Vec]([https://github.com/TIGER-AI-Lab/VLM2Vec]) and [B3](https://github.com/raghavlite/B3)
+Another example for a different distillation setup:
+
+```bash
+bash scripts/train_distill_propose_V.sh
+```
+
+Please inspect the scripts in the `scripts` directory for more training options and configurations.
+
+## 📊 Inference & Evaluation
+
+To evaluate a trained model on the MMEB (Multi-Modal Evaluation Benchmark), you can use the `eval.sh` script. Make sure your model checkpoint and evaluation data are correctly configured.
+
+```bash
+bash scripts/run_eval.sh
+```
+
+## 🙏 Acknowledgements
+
+This project builds upon the work of several other open-source projects. We are grateful for their contributions.
+
+- [VLM2Vec](https://github.com/TIGER-AI-Lab/VLM2Vec)
+- [B3](https://github.com/raghavlite/B3)
