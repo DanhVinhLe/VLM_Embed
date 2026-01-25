@@ -164,10 +164,6 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         if images is not None:
             # print("Processing images...")
             image_inputs = self.image_processor(images, **output_kwargs["images_kwargs"])
-            # print(f"Image inputs keys: {list(image_inputs.keys())}")
-            # print(f"Image inputs pixel_values shape: {image_inputs['pixel_values'].shape}")
-            # print(f"Image inputs image_sizes: {image_inputs['image_sizes']}")
-            # print(f"Image inputs batch_num_images: {image_inputs.get('batch_num_images', 'N/A')}")
 
             batch_num_images = iter(image_inputs["batch_num_images"])
             image_sizes = iter(image_inputs["image_sizes"])
@@ -179,7 +175,6 @@ class LlavaOnevisionProcessor(ProcessorMixin):
                 text, image_sizes, height, width, self.image_token, batch_num_images
             )
             
-            # print(f"Number of image tokens per image in batch: {num_image_tokens}")
             
 
         if videos is not None:
@@ -261,10 +256,6 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         # The base patch covers the entire image (no CLS for SigLIP)
         base_features = self.num_image_tokens
         num_image_tokens = unpadded_features + newline_features + base_features
-        # print(f"Original (H, W): ({orig_height}, {orig_width})")
-        # print(f"Best (H, W): ({height_best_resolution}, {width_best_resolution})")
-        # print(f"Unpadded features: {unpadded_features}, newline features: {newline_features}, base features: {base_features}")
-        # print(f"Num of image tokens: {num_image_tokens}")
         return num_image_tokens
 
     # Adapted from transformers.models.llava_next.processing_llava_next.LlavaNextProcessor._get_unpadded_features
@@ -287,7 +278,6 @@ class LlavaOnevisionProcessor(ProcessorMixin):
             new_width = int(round(width * (current_height / height), 7))
             padding = (current_width - new_width) // 2
             current_width -= padding * 2
-
         unpadded_features = current_height * current_width
         newline_features = current_height
 

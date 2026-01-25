@@ -303,6 +303,7 @@ class LlavaOnevisionModel(LlavaOnevisionPreTrainedModel):
                 base_image_feature = image_feature[0]
                 image_feature = image_feature[1:]
                 height = width = self.config.vision_config.image_size // self.config.vision_config.patch_size
+                
                 if height * width != base_image_feature.shape[0]:
                     raise ValueError("The number of patches is not consistent with the image size.")
                 num_patch_height, num_patch_width = get_anyres_image_grid_shape(
@@ -339,7 +340,6 @@ class LlavaOnevisionModel(LlavaOnevisionPreTrainedModel):
                 if image_newline is not None:
                     image_feature = torch.cat((image_feature, image_newline[None].to(image_feature)), dim=0)
                 
-            # print("Image with single patch, shape after adding newline:", image_feature.shape)
             new_image_features.append(image_feature)
             feature_lens.append(image_feature.size(0))
         feature_lens = torch.tensor(feature_lens, dtype=torch.long, device=image_features[0].device)
@@ -421,15 +421,12 @@ class LlavaOnevisionModel(LlavaOnevisionPreTrainedModel):
             hs_pool = [image_features.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
             selected_image_feature = torch.cat(hs_pool, dim=-1)
 
-        # print("Selected image feature shape (before strategy):", selected_image_feature.shape)
         if vision_feature_select_strategy == "default":
             selected_image_feature = selected_image_feature[:, 1:]
         elif vision_feature_select_strategy == "full":
             selected_image_feature = selected_image_feature
         image_features = self.multi_modal_projector(selected_image_feature)
         image_features = torch.split(image_features, image_num_patches, dim=0)
-        # print(f"Number of images: {len(image_features)}, image feature shapes: {[f.shape for f in image_features]}")
-
         image_features, feature_lens = self.pack_image_features(
             image_features,
             image_sizes,

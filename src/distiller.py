@@ -61,13 +61,13 @@ def process_image(image, resolution, max_dim=1344):
     elif resolution == "mid":
         target_max = 672
     elif resolution == "low":
-        target_max = 128
+        target_max = 224
     else:
         target_max = max_dim
 
     # resize if larger than target_max
-    if max_side > target_max:
-        image = image.resize((target_max, target_max))
+    # if max_side > target_max:
+    image = image.resize((target_max, target_max))
 
     return image
 
@@ -148,7 +148,7 @@ class Distiller(nn.Module):
         return processor
     
     def forward(self, criterion, batch):
-        if self.training_args.kd_loss_type in ['span_propose_attn', 'span_propose', 'span_propose_attn_only_phrase', 'span_propose_attn_only_word']:
+        if self.training_args.kd_loss_type.startswith("span_propose"):
             loss = criterion(self, batch, tokenizer = self.tokenizer)
         else: 
             loss = criterion(self, batch)
