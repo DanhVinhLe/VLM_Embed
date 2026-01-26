@@ -1,53 +1,41 @@
 #!/bin/bash
 
 # =========================================================================
-# Hyperparameter Tuning Script for SSA (Spectral-Structural Alignment)
+# Hyperparameter Tuning Script for SSA (Training + Eval + WandB Sync)
 # =========================================================================
 
-# GPU Configuration
+# --- Configuration ---
 NUM_GPUS_PER_NODE=8
 TRAIN_SCRIPT="main.py"
+EVAL_SCRIPT="eval_mmeb.py"
 BASE_EXP_NAME="SSA_Tune_DocVQA"
+WANDB_PROJECT="vlm_distillation" # Ensure this matches what main.py uses
 
 # 1. Dataset Configuration
-# Set to 'true' for full training, 'false' for faster tuning on DocVQA only
 USE_FULLSET=false
 
 if [ "$USE_FULLSET" = true ]; then
     SUBSETS=("OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W")
     echo "Running with FULL dataset set."
 else
-    SUBSETS=("DocVQA")
+    SUBSETS=("OK-VQA")
     echo "Running with SINGLE dataset (DocVQA) for tuning efficiency."
 fi
 
-# Evaluation Subsets (Datasets to appear in WandB)
-EVAL_SUBSETS=("OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W") 
+# Evaluation Subsets (Datasets to appear in WandB Table)
+# Note: Ensure these are space-separated for the eval script
+# EVAL_SUBSETS_ARR=("OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W")
+EVAL_SUBSETS_ARR=("OK-VQA")
+
+EVAL_SUBSETS_STR="${EVAL_SUBSETS_ARR[*]}" # Join array to string
 
 # =========================================================================
 # Hyperparameter Grid
 # =========================================================================
 
-# A. KD Weight: Balance between Contrastive Loss and SSA Loss
-# Range: [0.5, 2.0]
-#   0.5: Prefer Student's contrastive learning
-#   2.0: Force Student to mimic Teacher structure strictly
 KD_WEIGHTS=(0.3 0.5 1.0)
-
-# B. Spectral Variance Threshold: Amount of Teacher's energy (variance) to keep
-#   0.90: Aggressive filtering (removes 10% noise/tail) - Good if Teacher is very different size
-#   0.95: Balanced (Standard Espresso/PCA approach)
-#   0.99: Conservative (Keeps almost all Teacher details)
 VAR_THRESHOLDS=(0.90 0.95 0.99)
-
-# C. Modality Gap Weight: Strength of the geometric distance alignment
-#   0.1: Weak constraint
-#   1.0: Strong constraint (Standard)
 GAP_WEIGHTS=(0.1 1.0)
-
-# D. Matryoshka Dimensions: Slicing for efficiency
-#   ""  : Full dimension only (Standard SSA)
-#   "64": Optimize for both Full and first 64 dimensions
 MATRYOSHKA_OPTS=("64" "64 128") 
 
 # =========================================================================
@@ -59,30 +47,33 @@ for kd_w in "${KD_WEIGHTS[@]}"; do
     for gap_w in "${GAP_WEIGHTS[@]}"; do
       for mat_dim in "${MATRYOSHKA_OPTS[@]}"; do
 
-        # 1. Generate Unique Experiment Name
-        # Format: SSA_Tune_DocVQA_kd1.0_var0.95_gap1.0_mat64
+        # 1. Generate Experiment Name
         MAT_SUFFIX=""
         if [ -n "$mat_dim" ]; then
-            MAT_SUFFIX="_mat${mat_dim}"
+            MAT_SUFFIX="_mat${mat_dim// /_}" # Replace space with underscore for filename
         fi
         
         CURRENT_EXP_NAME="${BASE_EXP_NAME}_kd${kd_w}_var${var_t}_gap${gap_w}${MAT_SUFFIX}"
+        OUTPUT_DIR="training/$CURRENT_EXP_NAME"
         
+        # 2. Generate and Export Unique WandB ID
+        # This ensures Training and Eval write to the exact same run
+        export WANDB_RUN_ID="SSA_${CURRENT_EXP_NAME}_$(date +%s)"
+        export WANDB_PROJECT="$WANDB_PROJECT"
+
         echo "================================================================"
         echo "Starting Experiment: $CURRENT_EXP_NAME"
-        echo "  > KD Weight: $kd_w"
-        echo "  > Variance Threshold: $var_t"
-        echo "  > Gap Weight: $gap_w"
-        echo "  > Matryoshka Dims: ${mat_dim:-None}"
+        echo "Run ID: $WANDB_RUN_ID"
         echo "================================================================"
 
-        # 2. Prepare Optional Arguments
+        # 3. Prepare Arguments
         MAT_ARG=""
         if [ -n "$mat_dim" ]; then
             MAT_ARG="--ssa_matryoshka_dims $mat_dim"
         fi
 
-        # 3. Run Training
+        # 4. Run Training
+        # Note: main.py will pick up WANDB_RUN_ID from environment
         torchrun --nproc_per_node=$NUM_GPUS_PER_NODE $TRAIN_SCRIPT \
             --model_name "apple/FastVLM-0.5B" \
             --teacher_model_name "raghavlite/B3_Qwen2_2B" \
@@ -97,11 +88,11 @@ for kd_w in "${KD_WEIGHTS[@]}"; do
             --dataset_name "TIGER-Lab/MMEB-train" \
             --eval_dataset_name "TIGER-Lab/MMEB-eval" \
             --subset_name "${SUBSETS[@]}" \
-            --eval_subset_name "${EVAL_SUBSETS[@]}" \
+            --eval_subset_name "${EVAL_SUBSETS_ARR[@]}" \
             --dataset_split "original" \
             --image_dir "vlm2vec_train/MMEB-train" \
             --eval_image_dir "eval_images/" \
-            --output_dir "training/$CURRENT_EXP_NAME" \
+            --output_dir "$OUTPUT_DIR" \
             --per_device_train_batch_size 32 \
             --per_device_eval_batch_size 128 \
             --gradient_accumulation_steps 1 \
@@ -122,20 +113,48 @@ for kd_w in "${KD_WEIGHTS[@]}"; do
             --image_resolution "low" \
             --report_to "wandb" \
             --run_name "$CURRENT_EXP_NAME" \
-            \
             --kd_loss_type "ssa" \
             --kd_weight "$kd_w" \
             --spectral_variance_threshold "$var_t" \
             --modality_gap_weight "$gap_w" \
             $MAT_ARG
 
-        echo "Finished: $CURRENT_EXP_NAME"
+        # 5. Run Evaluation (On checkpoint-final)
+        CHECKPOINT_PATH="$OUTPUT_DIR/checkpoint-final"
         
-        # Optional: Disk Cleanup (Remove checkpoints, keep only logs/wandb)
+        echo "--> Training finished. Starting Evaluation on: $CHECKPOINT_PATH"
+        
+        # Using accelerate launch for multi-GPU eval
+        accelerate launch --multi_gpu --num_processes="$NUM_GPUS_PER_NODE" $EVAL_SCRIPT \
+            --model_name "$CHECKPOINT_PATH" \
+            --encode_output_path "$OUTPUT_DIR" \
+            --dataset_name "TIGER-Lab/MMEB-eval" \
+            --subset_name "${EVAL_SUBSETS_ARR[@]}" \
+            --dataset_split "test" \
+            --per_device_eval_batch_size 128 \
+            --image_dir "eval_images/" \
+            --pooling "eos" \
+            --model_backbone "llava_qwen2" \
+            --normalize True \
+            --bf16 \
+            --tgt_prefix_mod 
+
+        # 6. Log Eval Results to WandB
+        echo "--> Evaluation finished. Pushing results to WandB..."
+        # We pass the ID and Project to the python script to append the table
+        python3 scripts/log_eval_results.py "$WANDB_RUN_ID" "$WANDB_PROJECT" "$OUTPUT_DIR"
+
+        echo "Finished Cycle: $CURRENT_EXP_NAME"
+        
+        # 7. Cleanup (Optional: Remove checkpoints to save space, keep logs/jsons)
         # echo "Cleaning up checkpoints..."
-        # rm -rf "training/$CURRENT_EXP_NAME/checkpoint-*"
+        # rm -rf "$OUTPUT_DIR/checkpoint-*"
 
       done
     done
   done
 done
+
+# Cleanup temporary python script
+rm log_eval_results.py
+echo "All tuning experiments completed."

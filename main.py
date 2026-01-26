@@ -430,65 +430,6 @@ def main():
         dist.barrier()  # <--- Crucial: Wait for Rank 0 to finish saving!
     # =========================================================================
     
-    # =========================================================================
-    # NEW: Run MMEB Evaluation on the Final Model
-    # =========================================================================
-    if data_args.eval_dataset_name and data_args.eval_subset_name:
-        logger.info("*** Starting Final MMEB Evaluation ***")
-        
-        # 1. Clean up to free memory for Eval
-        del optimizer, lr_scheduler
-        if "epoch_iterator" in locals(): del epoch_iterator
-        torch.cuda.empty_cache()
-
-        # 2. Get the student model (unwrap from Distiller and DDP)
-        # The distiller is wrapped in DDP (distiller.module)
-        # The Student is inside the distiller (distiller.module.student)
-        model_to_eval = distiller.module.student if hasattr(distiller, "module") else distiller.student
-        
-        # 3. Run Evaluation
-        # We pass the same 'device' used in training
-        # Ensure encode_output_path is set to a subfolder to avoid clutter
-        if not data_args.encode_output_path:
-            data_args.encode_output_path = os.path.join(training_args.output_dir, "eval_results")
-
-        eval_results = run_mmeb_evaluation(
-            model=model_to_eval,
-            processor=distiller.module.get_student_processor() if hasattr(distiller, "module") else distiller.get_student_processor(),
-            model_args=model_args,
-            data_args=data_args,
-            training_args=training_args,
-            device=device
-        )
-
-        # 4. Log to WandB (Main Process Only)
-        if is_main_process() and "wandb" in training_args.report_to and eval_results:
-            logger.info("Logging MMEB results to WandB Table...")
-            
-            # Create Data for Table
-            table_data = []
-            total_acc = 0.0
-            for subset, acc in eval_results.items():
-                table_data.append([subset, acc])
-                total_acc += acc
-            
-            # Add Average
-            avg_acc = total_acc / len(eval_results) if eval_results else 0.0
-            table_data.append(["Average", avg_acc])
-
-            # Create Table
-            eval_table = wandb.Table(data=table_data, columns=["Subset", "Accuracy"])
-            
-            # Log Table and Average Metric
-            wandb.log({
-                "eval/mmeb_table": eval_table,
-                "eval/mmeb_avg_acc": avg_acc
-            })
-            
-            print_master(f"Final Average Accuracy: {avg_acc:.4f}")
-
-    # =========================================================================
-
     if is_main_process() and "wandb" in training_args.report_to:
         wandb.finish()
 
