@@ -25,11 +25,11 @@ torchrun --standalone \
     --model_backbone "llava_onevision" \
     --pooling "eos" \
     --dataset_name "TIGER-Lab/MMEB-train" \
-    --subset_name "OK-VQA" "A-OKVQA" "DocVQA" "InfographicsVQA" "ChartQA" "Visual7W" \
+    --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" \
     --dataset_split "original" \
     --image_dir "vlm2vec_train/MMEB-train" \
     --percent_data 1.0 \
-    --output_dir "training/span_propose_llava_ov_vqa" \
+    --output_dir "training/span_propose_llava_ov_cls_v3" \
     --per_device_train_batch_size 7 \
     --gradient_accumulation_steps 1 \
     --learning_rate 1e-4 \
@@ -48,7 +48,7 @@ torchrun --standalone \
     --w_cross_modal_loss 2.5 \
     --kd_loss_type "span_propose_attn_llava_ov" \
     --image_resolution "low" \
-    --teacher_layer_mapping 0 22 25 28 \
-    --student_layer_mapping 0 18 21 24 \
-    --split_layer_mapping 0 1 4 4 4 \
+    --teacher_layer_mapping 0 19 22 25 28 \
+    --student_layer_mapping 0 15 18 21 24 \
+    --split_layer_mapping 0 1 5 5 5 5 \
     --projector_lr 5e-4
