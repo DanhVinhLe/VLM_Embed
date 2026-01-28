@@ -8,3 +8,4 @@ vlm
 training/
 MMEB-evaloutputs/
 .ipynb_checkpoints/
+manifold_logs/
