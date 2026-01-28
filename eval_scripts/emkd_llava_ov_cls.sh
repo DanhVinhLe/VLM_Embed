@@ -1,14 +1,15 @@
 python eval_mmeb.py \
-    --model_name /workspace/ComfyUI/models/gligen/VLM_Embed/training/meta_span_weighted_cls_v4/checkpoint-final \
-    --encode_output_path ./MMEB-evaloutputs/meta_span_weighted_cls_last_0 \
+    --model_name /workspace/ComfyUI/models/gligen/VLM_Embed/training/meta_emkd_llava_ov_cls/checkpoint-final \
+    --encode_output_path ./MMEB-evaloutputs/meta_emkd_llava_ov_cls_v2 \
     --lora --lora_r 64 --lora_alpha 64 \
     --pooling eos \
-    --model_backbone llava_qwen2 \
+    --model_backbone llava_onevision \
     --normalize True \
     --bf16 \
     --dataset_name TIGER-Lab/MMEB-eval \
     --subset_name ImageNet-1K HatefulMemes SUN397 N24News VOC2007 \
     --dataset_split test \
-    --per_device_eval_batch_size 8 \
+    --per_device_eval_batch_size 2 \
+    --image_resolution low \
     --image_dir eval_images/ \
     --tgt_prefix_mod

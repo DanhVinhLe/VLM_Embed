@@ -335,7 +335,7 @@ def map_teacher_clusters_to_student(cluster_labels,
                                     student_resize=1024,
                                     num_student_tokens=None, 
                                     use_llava_mapping=True,
-                                    mapping_mode='both'):
+                                    mapping_mode='base_only'):
     """Map cluster labels từ teacher sang student dựa trên vị trí patch"""
     if use_llava_mapping:
         if num_student_tokens is None:
@@ -1108,7 +1108,7 @@ def compute_vision_cluster_loss_weighted(projectors,
                                 student_patch_size=14,
                                 student_resize=384,
                                 num_student_vision_tokens=None,
-                                mapping_mode='both'):
+                                mapping_mode='base_only'):
     """Tính vision cluster loss cho một sample."""
     device = student_vision_hidden_list[0].device
     num_teacher_vision_tokens = teacher_vision_hidden_list[0].size(0)
@@ -1141,7 +1141,7 @@ def compute_vision_cluster_loss_weighted(projectors,
             teacher_vision_hidden_list[first_t_idx],
             teacher_patches_per_row, teacher_patch_size,
             original_width, original_height,
-            min_cluster_size=6
+            min_cluster_size=5
         )
         
         # Chuẩn bị cluster info cho teacher
@@ -1186,7 +1186,7 @@ def compute_vision_cluster_loss_weighted(projectors,
             teacher_vision_hidden_list[first_t_idx],
             teacher_patches_per_row, teacher_patch_size,
             original_width, original_height,
-            min_cluster_size=8  # Larger min_cluster_size for span-level
+            min_cluster_size=6  # Larger min_cluster_size for span-level
         )
         
         # Chuẩn bị cluster info cho teacher
@@ -1338,9 +1338,9 @@ class SpanProposeCriterionWeightedLLavaOV(nn.Module):
         self.student_patch_size = getattr(args, 'student_patch_size', 14)
         self.student_resize = getattr(args, 'student_resize', 384)
         
-        self.mapping_mode = getattr(args, 'vision_mapping_mode', 'both')
+        self.mapping_mode = getattr(args, 'vision_mapping_mode', 'base_only')
         
-        self.w_cross_modal = getattr(args, 'w_cross_modal_loss', 0.3)
+        self.w_cross_modal = getattr(args, 'w_cross_modal_loss', 0.25)
     
     def _dist_gather_tensor(self, t):
         t = t.contiguous()
