@@ -27,7 +27,7 @@ torchrun --standalone \
     --dataset_name "TIGER-Lab/MMEB-train" \
     --subset_name "ImageNet_1K" "N24News" "HatefulMemes" "VOC2007" "SUN397" \
     --dataset_split "original" \
-    --image_dir "/workspace/ComfyUI/models/gligen/VLM_Embed/vlm2vec_train/MMEB-train" \
+    --image_dir "./vlm2vec_train/MMEB-train" \
     --percent_data 1.0 \
     --output_dir "training/rebuttal_hierd_cls_5_layers" \
     --per_device_train_batch_size 16 \
