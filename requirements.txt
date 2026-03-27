@@ -25,3 +25,6 @@ hnswlib
 einops
 deepspeed==0.17.6
 numba
+hdbscan
+spacy
+tslearn

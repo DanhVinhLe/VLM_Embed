@@ -8,6 +8,7 @@ files = {
     "N24News.zip": "images_zip/N24News.zip",
     "SUN397.zip": "images_zip/SUN397.zip",
     "HatefulMemes.zip": "images_zip/HatefulMemes.zip",
+    "VOC2007.zip": "images_zip/VOC2007.zip",
 }
 
 dataset = "TIGER-Lab/MMEB-train"
