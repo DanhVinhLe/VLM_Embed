@@ -117,6 +117,7 @@ class TrainingArguments(TrainingArguments):
         metadata={"help": "List of split layers for student; number of elements equals number of projectors"}   
     )
     w_cross_modal_loss: float = field(default=1.0, metadata={"help": "weight for cross modal loss"})
+    min_samples_dbscan_teacher: int = field(default=2, metadata={"help": "min_samples for DBSCAN when clustering teacher features for span loss"})
 @dataclass
 class MTEBArguments:
     device: str = field(default="cuda", metadata={"help": "use cuda for single GPU inference, if multiple GPUs are available it will use DP automatically"})
