@@ -14,6 +14,11 @@ class CKALoss(nn.Module):
         dS = SH.size(-1)
         SH = SH.view(-1, dS).to(torch.float64)
         TH = TH.view(-1, dT).to(torch.float64)
+        
+        if dS != dT:
+            min_dim = min(dS, dT)
+            SH = SH[:, :min_dim]
+            TH = TH[:, :min_dim]
 
         SH = SH - SH.mean(0, keepdim=True)
         TH = TH - TH.mean(0, keepdim=True)
@@ -60,8 +65,8 @@ class EMOLoss(nn.Module):
         teacher_qry_input = input_data['teacher_inputs']['qry']
         teacher_pos_input = input_data['teacher_inputs']['pos']
         
-        num_text_qry_tokens = ((teacher_qry_input['input_ids'] < 151652) | (teacher_qry_input['input_ids'] > 151656)).sum(dim=1)
-        num_text_pos_tokens = ((teacher_pos_input['input_ids'] < 151652) | (teacher_pos_input['input_ids'] > 151656)).sum(dim=1)
+        num_text_qry_tokens = (((teacher_qry_input['input_ids'] < 151652) | (teacher_qry_input['input_ids'] > 151656)) & (teacher_qry_input['input_ids'] != 151643)).sum(dim=1)
+        num_text_pos_tokens = (((teacher_pos_input['input_ids'] < 151652) | (teacher_pos_input['input_ids'] > 151656)) & (teacher_pos_input['input_ids'] != 151643)).sum(dim=1)
         batch_size = student_qry_input['input_ids'].size(0)
         with torch.no_grad():
             teacher_model.eval()
@@ -135,7 +140,7 @@ class EMOLoss(nn.Module):
 
             qry_imp = qry_imp * qry_mask.float()
             pos_imp = pos_imp * pos_mask.float()
-            qry_topk_idx = torch.topk(qry_imp, min(num_text_qry_tokens[i]//3, int(qry_mask.sum().item()))).indices
+            qry_topk_idx = torch.topk(qry_imp, min((num_text_qry_tokens[i]+1)//3, int(qry_mask.sum().item()))).indices
             pos_topk_idx = torch.topk(pos_imp, min((num_text_pos_tokens[i]+1)//3, int(pos_mask.sum().item()))).indices
 
             qry_topk = [(int(idx), int(qry_ids[idx]), float(qry_imp[idx])) for idx in qry_topk_idx if qry_mask[idx]]
@@ -454,15 +459,26 @@ class EMOLoss(nn.Module):
         student_idx = self.extract_student_indices(input_data, topk_results)
         
         for i in range(batch_size):
-            qry_topk_idx = [idx for idx, _, _ in topk_results[i]['qry_topk']]
-            pos_topk_idx = [idx for idx, _, _ in topk_results[i]['pos_topk']]
-            
+            teacher_qry_token_ids = {tok_id for _, tok_id, _ in topk_results[i]['qry_topk']}
+            teacher_pos_token_ids = {tok_id for _, tok_id, _ in topk_results[i]['pos_topk']}
+
+            student_qry_token_ids = set(input_data['student_inputs']['qry']['input_ids'][i].tolist())
+            student_pos_token_ids = set(input_data['student_inputs']['pos']['input_ids'][i].tolist())
+
+            # Chỉ giữ token_id xuất hiện ở cả hai
+            common_qry_ids = teacher_qry_token_ids & student_qry_token_ids
+            common_pos_ids = teacher_pos_token_ids & student_pos_token_ids
+
+            # Filter teacher và student indices theo common token_ids
+            qry_topk_idx   = [t_idx for t_idx, tok_id, _ in topk_results[i]['qry_topk'] if tok_id in common_qry_ids]
+            pos_topk_idx   = [t_idx for t_idx, tok_id, _ in topk_results[i]['pos_topk'] if tok_id in common_pos_ids]
+            s_qry_topk_idx = [s_idx for (_, tok_id, _), s_idx in zip(topk_results[i]['qry_topk'], student_idx[i]['qry'])
+                            if tok_id in common_qry_ids and s_idx < student_last_k_qry[0].size(2)]
+            s_pos_topk_idx = [s_idx for (_, tok_id, _), s_idx in zip(topk_results[i]['pos_topk'], student_idx[i]['pos'])
+                            if tok_id in common_pos_ids and s_idx < student_last_k_pos[0].size(2)]
+
             if len(qry_topk_idx) == 0 or len(pos_topk_idx) == 0:
-                print("Warning: No valid top-k tokens found for instance {}, skipping attention loss computation.".format(i))
                 continue
-            
-            s_qry_topk_idx = [idx for idx in student_idx[i]['qry'] if idx < student_last_k_qry[0].size(2)]
-            s_pos_topk_idx = [idx for idx in student_idx[i]['pos'] if idx < student_last_k_pos[0].size(2)]
             
             # Tính attention loss cho k layer cuối
             for teacher_qry_att, teacher_pos_att, student_qry_att, student_pos_att in zip(

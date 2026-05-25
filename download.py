@@ -4,11 +4,14 @@ from huggingface_hub import hf_hub_download
 
 # Danh sách zip file cần tải
 files = {
-    "ImageNet_1K.zip": "images_zip/ImageNet_1K.zip",
-    "N24News.zip": "images_zip/N24News.zip",
-    "HatefulMemes.zip": "images_zip/HatefulMemes.zip",
-    "VOC2007.zip": "images_zip/VOC2007.zip",
-    "SUN397.zip": "images_zip/SUN397.zip",
+    # "VisDial.zip": "images_zip/VisDial.zip",
+    # "CIRR.zip": "images_zip/CIRR.zip",
+    # "VisualNews_i2t.zip": "images_zip/VisualNews_i2t.zip",
+    # "MSCOCO_i2t.zip": "images_zip/MSCOCO_i2t.zip",
+    # "MSCOCO_t2i.zip": "images_zip/MSCOCO_t2i.zip",
+    # "NIGHTS.zip": "images_zip/NIGHTS.zip",
+    # "WebQA.zip": "images_zip/WebQA.zip",
+    "VisualNews_t2i.zip": "images_zip/VisualNews_t2i.zip"
 }
 
 dataset = "TIGER-Lab/MMEB-train"
